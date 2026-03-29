@@ -59,10 +59,9 @@ pub fn start_codex_monitor(app: AppHandle, state: SharedState) {
                     let new_offset = file_len;
                     known_files.insert(path.clone(), new_offset);
 
-                    let session_id = path.file_stem()
+                    let session_id = format!("codex-{}", path.file_stem()
                         .and_then(|s| s.to_str())
-                        .unwrap_or("codex")
-                        .to_string();
+                        .unwrap_or("unknown"));
 
                     if first_time {
                         // First time seeing this file: only apply the last known state
@@ -77,12 +76,7 @@ pub fn start_codex_monitor(app: AppHandle, state: SharedState) {
                         }
                         if !ended {
                             if let Some(state_str) = last_state {
-                                crate::update_session_and_emit(&app, &state, &session_id, state_str, "monitor");
-                                if let Some(entry) = state.lock().unwrap_or_else(|e| e.into_inner())
-                                    .sessions.get_mut(&session_id)
-                                {
-                                    entry.agent_id = "Codex".into();
-                                }
+                                codex_update_and_emit(&app, &state, &session_id, state_str, "monitor");
                             }
                         }
                     } else {
@@ -90,20 +84,13 @@ pub fn start_codex_monitor(app: AppHandle, state: SharedState) {
                         for line in new_content.lines() {
                             if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
                                 if is_codex_session_end(&event) {
-                                    crate::update_session_and_emit(&app, &state, &session_id, "idle", "SessionEnd");
+                                    codex_update_and_emit(&app, &state, &session_id, "idle", "SessionEnd");
                                     continue;
                                 }
 
-                                let event_type = event["type"].as_str().unwrap_or("").to_string();
+                                let event_type = event["type"].as_str().unwrap_or("");
                                 if let Some(state_str) = map_codex_event(&event) {
-                                    crate::update_session_and_emit(&app, &state, &session_id, state_str, &event_type);
-                                    if let Some(entry) = state.lock().unwrap_or_else(|e| e.into_inner())
-                                        .sessions.get_mut(&session_id)
-                                    {
-                                        if entry.agent_id.is_empty() {
-                                            entry.agent_id = "Codex".into();
-                                        }
-                                    }
+                                    codex_update_and_emit(&app, &state, &session_id, state_str, event_type);
                                 }
                             }
                         }
@@ -114,6 +101,30 @@ pub fn start_codex_monitor(app: AppHandle, state: SharedState) {
                 known_files.retain(|path, _| path.exists());
             }
         });
+}
+
+/// Update state machine and emit — same as `update_session_and_emit` but
+/// atomically sets `agent_id = "Codex"` in the same lock to avoid the default
+/// "claude-code" label from `SessionEntry::new()`.
+fn codex_update_and_emit(app: &AppHandle, state: &SharedState, session_id: &str, state_str: &str, event: &str) {
+    let (resolved, svg) = {
+        let mut sm = state.lock().unwrap_or_else(|e| e.into_inner());
+        if event == "SessionEnd" {
+            sm.handle_session_end(session_id);
+        } else {
+            sm.update_session_state(session_id, state_str, event);
+        }
+        // Set agent_id atomically — before releasing the lock
+        if let Some(entry) = sm.sessions.get_mut(session_id) {
+            entry.agent_id = "Codex".into();
+        }
+        let resolved = sm.resolve_display_state();
+        let svg = sm.svg_for_state(&resolved);
+        sm.current_state = resolved.clone();
+        sm.current_svg = svg.clone();
+        (resolved, svg)
+    };
+    crate::emit_state(app, &resolved, &svg);
 }
 
 /// Map a Codex JSONL entry to a Clyde animation state.

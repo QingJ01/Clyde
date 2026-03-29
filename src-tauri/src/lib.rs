@@ -341,8 +341,8 @@ pub(crate) fn sync_hit(app: &AppHandle) {
 }
 
 /// Shared pipeline: lock state → update session → resolve → emit.
-/// Used by codex_monitor and cleanup loop. The HTTP server has its own
-/// more complex version (oneshot handling, metadata, DND).
+/// Available for monitors that don't need custom agent_id tagging.
+#[allow(dead_code)]
 pub(crate) fn update_session_and_emit(
     app: &AppHandle,
     state: &SharedState,
