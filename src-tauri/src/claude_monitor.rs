@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use crate::state_machine::SharedState;
 
 const POLL_INTERVAL_MS: u64 = 2000;
@@ -71,6 +71,19 @@ pub fn start_claude_monitor(app: AppHandle, state: SharedState) {
                         // Extract session_id from the entry if available
                         if let Some(sid) = entry.get("sessionId").and_then(|s| s.as_str()) {
                             session_id = format!("claude-monitor-{}", &sid[..sid.len().min(12)]);
+                        }
+
+                        // Extract permissionMode from transcript entries
+                        if let Some(mode) = entry.get("permissionMode").and_then(|m| m.as_str()) {
+                            if let Some(tracker) = app.try_state::<crate::permission_mode::ModeTracker>() {
+                                let lang = app.try_state::<crate::prefs::SharedPrefs>()
+                                    .map(|p: tauri::State<crate::prefs::SharedPrefs>| p.lock().unwrap_or_else(|e| e.into_inner()).lang.clone())
+                                    .unwrap_or_else(|| "en".into());
+                                crate::permission_mode::update_session_mode(
+                                    &app, &tracker, &session_id, mode,
+                                    crate::permission_mode::ModeSource::Transcript, &lang,
+                                );
+                            }
                         }
 
                         if let Some(state_str) = map_claude_event(&entry) {

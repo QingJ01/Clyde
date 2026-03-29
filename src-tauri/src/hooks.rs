@@ -67,6 +67,7 @@ impl HookInstaller {
             "PreToolUse", "PostToolUse", "PostToolUseFailure",
             "Stop", "SubagentStart", "SubagentStop",
             "Notification", "Elicitation", "WorktreeCreate",
+            "ConfigChange",
         ];
 
         let obj = settings.as_object_mut()

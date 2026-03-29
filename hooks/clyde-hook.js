@@ -23,6 +23,7 @@ const EVENT_TO_STATE = {
   // PermissionRequest is handled by HTTP hook (blocking) — not command hook
   Elicitation: "notification",
   WorktreeCreate: "carrying",
+  ConfigChange: "idle",            // no animation change, but forwards permission_mode
 };
 
 const event = process.argv[2];
@@ -152,25 +153,30 @@ process.stdin.on("data", (c) => chunks.push(c));
 process.stdin.on("end", () => {
   let sessionId = "default";
   let cwd = "";
+  let permissionMode = undefined;
   try {
     const payload = JSON.parse(Buffer.concat(chunks).toString());
     sessionId = payload.session_id || "default";
     cwd = payload.cwd || "";
+    // Extract permission_mode from hook input (available on PermissionRequest and other events)
+    if (payload.permission_mode) permissionMode = payload.permission_mode;
+    else if (payload.input && payload.input.permission_mode) permissionMode = payload.input.permission_mode;
   } catch {}
-  send(sessionId, cwd);
+  send(sessionId, cwd, permissionMode);
 });
 
 // Safety: if stdin doesn't end in 400ms, send with default session
 // (200ms was too aggressive on slow machines / AV scanning)
-setTimeout(() => send("default", ""), 400);
+setTimeout(() => send("default", "", undefined), 400);
 
-function send(sessionId, cwd) {
+function send(sessionId, cwd, permissionMode) {
   if (sent) return;
   sent = true;
 
   const body = { state, session_id: sessionId, event };
   body.agent_id = "claude-code";
   if (cwd) body.cwd = cwd;
+  if (permissionMode) body.permission_mode = permissionMode;
   if (!process.env.CLYDE_REMOTE) {
     // Walk to stable terminal PID — process.ppid is an ephemeral shell
     // that dies when the hook exits, so it's useless for later focus calls

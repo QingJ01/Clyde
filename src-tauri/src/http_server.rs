@@ -36,6 +36,7 @@ struct ServerCtx {
     pending_perms: PendingPerms,
     app:           AppHandle,
     bubble_map:    permission::BubbleMap,
+    mode_tracker:  crate::permission_mode::ModeTracker,
 }
 
 #[derive(Deserialize)]
@@ -47,7 +48,8 @@ struct StatePayload {
     event:      Option<String>,
     source_pid: Option<u32>,
     cwd:        Option<String>,
-    agent_id:   Option<String>,
+    agent_id:        Option<String>,
+    permission_mode: Option<String>,
 }
 
 // NOTE: We accept raw JSON for permission requests because Claude Code's
@@ -105,6 +107,18 @@ async fn post_state(
 
     crate::emit_state(&ctx.app, &new_state, &new_svg);
 
+    // Update permission mode if provided
+    if let Some(ref mode) = payload.permission_mode {
+        use tauri::Manager;
+        let lang = ctx.app.try_state::<crate::prefs::SharedPrefs>()
+            .map(|p: tauri::State<crate::prefs::SharedPrefs>| p.lock_or_recover().lang.clone())
+            .unwrap_or_else(|| "en".into());
+        crate::permission_mode::update_session_mode(
+            &ctx.app, &ctx.mode_tracker, &sid, mode,
+            crate::permission_mode::ModeSource::Hook, &lang,
+        );
+    }
+
     // Auto-focus terminal only on "attention" (task complete).
     // "notification" is informational — don't steal focus for it.
     if payload.state == "attention" {
@@ -143,11 +157,14 @@ async fn post_permission(
 
     let bubble_data = permission::BubbleData {
         id: entry_id.clone(),
+        window_kind: permission::WindowKind::ApprovalRequest,
         tool_name,
         tool_input,
         suggestions,
         session_id,
         is_elicitation: false,
+        mode_label: None,
+        mode_description: None,
     };
 
     let bubble_opened = permission::show_bubble(&ctx.app, &ctx.bubble_map, bubble_data);
@@ -213,8 +230,8 @@ fn perm_response(decision: &PermDecision) -> Value {
     })
 }
 
-pub async fn start_server(app: AppHandle, state: SharedState, pending_perms: PendingPerms, bubble_map: permission::BubbleMap) -> Option<u16> {
-    let ctx = ServerCtx { state, pending_perms, app, bubble_map };
+pub async fn start_server(app: AppHandle, state: SharedState, pending_perms: PendingPerms, bubble_map: permission::BubbleMap, mode_tracker: crate::permission_mode::ModeTracker) -> Option<u16> {
+    let ctx = ServerCtx { state, pending_perms, app, bubble_map, mode_tracker };
 
     let router = Router::new()
         .route("/state",      get(health))
