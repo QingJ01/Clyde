@@ -36,6 +36,8 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
         .inner_size(BUBBLE_WIDTH as f64, 200.0)
         .position(x as f64, y as f64)
         .decorations(false)
+        .transparent(true)
+        .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
