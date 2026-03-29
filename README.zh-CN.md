@@ -143,7 +143,12 @@ npm test             # cargo test（19 个单元测试）
 
 ### 贡献者
 
-<a href="https://github.com/QingJ01"><img src="https://github.com/QingJ01.png" width="50" style="border-radius:50%" /></a>
+<table>
+  <tr>
+    <td align="center"><a href="https://github.com/QingJ01"><img src="https://github.com/QingJ01.png" width="50" style="border-radius:50%" /><br /><sub>QingJ01</sub></a></td>
+    <td align="center"><a href="https://github.com/rullerzhou-afk"><img src="https://github.com/rullerzhou-afk.png" width="50" style="border-radius:50%" /><br /><sub>rullerzhou-afk</sub></a></td>
+  </tr>
+</table>
 
 
 ## 致谢
