@@ -218,6 +218,25 @@ function syncHttpHook(entries, expectedUrl) {
   return { found, changed };
 }
 
+function removeFlatHttpHooks(entries, marker) {
+  if (!Array.isArray(entries)) return { entries: [], removed: 0, changed: false };
+
+  let removed = 0;
+  const nextEntries = entries.filter((entry) => {
+    if (!entry || typeof entry !== "object") return true;
+    if (entry.type !== "http" || typeof entry.url !== "string") return true;
+    if (!entry.url.includes(marker)) return true;
+    removed++;
+    return false;
+  });
+
+  return {
+    entries: nextEntries,
+    removed,
+    changed: removed > 0,
+  };
+}
+
 function getHookServerPort(explicitPort) {
   return Number.isInteger(explicitPort) ? explicitPort : (readRuntimePort() || DEFAULT_SERVER_PORT);
 }
@@ -441,6 +460,13 @@ function registerHooks(options = {}) {
       changed = true;
     }
 
+    const flatCleanup = removeFlatHttpHooks(settings.hooks[event], HTTP_MARKER);
+    if (flatCleanup.changed) {
+      settings.hooks[event] = flatCleanup.entries;
+      removed += flatCleanup.removed;
+      changed = true;
+    }
+
     const desiredHook = { ...hook, url: buildPermissionUrl(hookPort) };
     const httpSync = syncHttpHook(settings.hooks[event], desiredHook.url);
     if (httpSync.found) {
@@ -572,6 +598,7 @@ module.exports = {
   __test: {
     getClaudeVersion,
     versionLessThan,
+    removeFlatHttpHooks,
     removeMatchingCommandHooks,
     reconcileVersionedHooks,
     shouldReconcileVersionedHooks,
