@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clyde on Desk — Desktop Pet for AI Coding Agents</title>
+  <meta name="description" content="A lightweight desktop pet that mirrors your AI coding agent in real time. Works with Claude Code, Codex CLI, and Copilot CLI." />
+  <meta property="og:title" content="Clyde on Desk" />
+  <meta property="og:description" content="Your AI agent, alive on your desktop." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://github.com/QingJ01/Clyde" />
+  <link rel="icon" href="tray-icon.png" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+  <!-- ========== HEADER ========== -->
+  <header id="site-header">
+    <div class="container header-inner">
+      <a href="#hero" class="logo">
+        <img src="tray-icon.png" alt="Clyde" width="32" height="32" />
+        <span>Clyde on Desk</span>
+      </a>
+      <nav id="main-nav">
+        <a href="#features" data-i18n="nav.features">Features</a>
+        <a href="#how-it-works" data-i18n="nav.howItWorks">How It Works</a>
+        <a href="#agents" data-i18n="nav.agents">Agents</a>
+        <a href="#download" data-i18n="nav.download">Download</a>
+        <a href="https://github.com/QingJ01/Clyde" target="_blank" rel="noopener">GitHub</a>
+        <button id="lang-toggle" aria-label="Switch language">EN / 中文</button>
+      </nav>
+      <button id="hamburger" aria-label="Menu" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ========== HERO ========== -->
+  <section id="hero">
+    <div class="container hero-grid">
+      <div class="hero-text">
+        <span class="pill" data-i18n="hero.pill">Open Source &middot; AGPL-3.0</span>
+        <h1 data-i18n="hero.title">Your AI agent,<br/>alive on your desktop</h1>
+        <p class="hero-sub" data-i18n="hero.sub">A lightweight desktop pet that mirrors your AI coding agent in real time. Thinking when you prompt, typing when tools run, celebrating on completion.</p>
+        <div class="hero-ctas">
+          <a href="#download" class="btn btn-primary" data-i18n="hero.download">Download for Free</a>
+          <a href="https://github.com/QingJ01/Clyde" target="_blank" rel="noopener" class="btn btn-outline">GitHub &rarr;</a>
+        </div>
+        <div class="hero-stats">
+          <div class="stat"><strong>~5 MB</strong><span data-i18n="hero.bundle">Bundle</span></div>
+          <div class="stat-divider"></div>
+          <div class="stat"><strong>&lt;1s</strong><span data-i18n="hero.startup">Startup</span></div>
+          <div class="stat-divider"></div>
+          <div class="stat"><strong>&lt;30 MB</strong><span data-i18n="hero.memory">Memory</span></div>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <div class="hero-glow"></div>
+        <img src="gif/clawd-idle.gif" alt="Clyde idle animation" class="hero-clyde" width="280" height="280" />
+      </div>
+    </div>
+    <div class="hero-scroll-hint" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+    </div>
+  </section>
+
+  <!-- ========== FEATURES ========== -->
+  <section id="features">
+    <div class="container">
+      <div class="section-header anim">
+        <h2 data-i18n="features.title">12 animated states, zero configuration</h2>
+        <p data-i18n="features.sub">Clyde watches your agent's events in real time and reacts instantly.</p>
+      </div>
+      <div class="features-grid">
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-idle.gif" alt="Idle" loading="lazy" />
+          <h3 data-i18n="features.idle.name">Idle</h3>
+          <p data-i18n="features.idle.desc">Eyes follow your cursor, body leans gently</p>
+          <code>Eye Tracking</code>
+        </div>
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-thinking.gif" alt="Thinking" loading="lazy" />
+          <h3 data-i18n="features.thinking.name">Thinking</h3>
+          <p data-i18n="features.thinking.desc">Ponders when you submit a prompt</p>
+          <code>UserPromptSubmit</code>
+        </div>
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-typing.gif" alt="Typing" loading="lazy" />
+          <h3 data-i18n="features.typing.name">Typing</h3>
+          <p data-i18n="features.typing.desc">Types away when tools are running</p>
+          <code>PreToolUse</code>
+        </div>
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-building.gif" alt="Building" loading="lazy" />
+          <h3 data-i18n="features.building.name">Building</h3>
+          <p data-i18n="features.building.desc">Constructs when 3+ sessions are active</p>
+          <code>3+ Sessions</code>
+        </div>
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-juggling.gif" alt="Juggling" loading="lazy" />
+          <h3 data-i18n="features.juggling.name">Juggling</h3>
+          <p data-i18n="features.juggling.desc">Juggles tasks with one subagent running</p>
+          <code>SubagentStart</code>
+        </div>
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-conducting.gif" alt="Conducting" loading="lazy" />
+          <h3 data-i18n="features.conducting.name">Conducting</h3>
+          <p data-i18n="features.conducting.desc">Orchestrates when 2+ subagents run</p>
+          <code>2+ Subagents</code>
+        </div>
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-error.gif" alt="Error" loading="lazy" />
+          <h3 data-i18n="features.error.name">Error</h3>
+          <p data-i18n="features.error.desc">Flashes when a tool execution fails</p>
+          <code>PostToolUseFailure</code>
+        </div>
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-happy.gif" alt="Happy" loading="lazy" />
+          <h3 data-i18n="features.happy.name">Happy</h3>
+          <p data-i18n="features.happy.desc">Bounces with joy when task completes</p>
+          <code>Stop</code>
+        </div>
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-notification.gif" alt="Notification" loading="lazy" />
+          <h3 data-i18n="features.notification.name">Notification</h3>
+          <p data-i18n="features.notification.desc">Jumps to alert you of something important</p>
+          <code>Notification</code>
+        </div>
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-sweeping.gif" alt="Sweeping" loading="lazy" />
+          <h3 data-i18n="features.sweeping.name">Sweeping</h3>
+          <p data-i18n="features.sweeping.desc">Sweeps up during context compaction</p>
+          <code>PreCompact</code>
+        </div>
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-carrying.gif" alt="Carrying" loading="lazy" />
+          <h3 data-i18n="features.carrying.name">Carrying</h3>
+          <p data-i18n="features.carrying.desc">Hauls a box when creating a worktree</p>
+          <code>WorktreeCreate</code>
+        </div>
+
+        <div class="feature-card anim">
+          <img src="gif/clawd-sleeping.gif" alt="Sleeping" loading="lazy" />
+          <h3 data-i18n="features.sleeping.name">Sleeping</h3>
+          <p data-i18n="features.sleeping.desc">Dozes off after 60 seconds of inactivity</p>
+          <code>60s Idle</code>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== HOW IT WORKS ========== -->
+  <section id="how-it-works">
+    <div class="container">
+      <div class="section-header anim">
+        <h2 data-i18n="hiw.title">From event to animation in milliseconds</h2>
+        <p data-i18n="hiw.sub">One pipeline, three agent sources, twelve reactions.</p>
+      </div>
+      <div class="pipeline anim">
+        <div class="pipe-step">
+          <div class="pipe-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M7 8l4 4-4 4"/><line x1="13" y1="16" x2="17" y2="16"/></svg>
+          </div>
+          <h4 data-i18n="hiw.hook">Hook Event</h4>
+          <p data-i18n="hiw.hookDesc">Claude Code fires a hook on tool use, prompt, or completion</p>
+        </div>
+        <div class="pipe-arrow" aria-hidden="true"><svg width="32" height="16" viewBox="0 0 32 16"><path d="M0 8h28M22 2l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></div>
+        <div class="pipe-step">
+          <div class="pipe-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12A10 10 0 1 1 12 2"/><path d="M22 2L12 12"/></svg>
+          </div>
+          <h4 data-i18n="hiw.http">HTTP POST</h4>
+          <p data-i18n="hiw.httpDesc">Event sent to Clyde's local server on port 23333</p>
+        </div>
+        <div class="pipe-arrow" aria-hidden="true"><svg width="32" height="16" viewBox="0 0 32 16"><path d="M0 8h28M22 2l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></div>
+        <div class="pipe-step">
+          <div class="pipe-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+          </div>
+          <h4 data-i18n="hiw.state">State Machine</h4>
+          <p data-i18n="hiw.stateDesc">Priority resolution across all active sessions</p>
+        </div>
+        <div class="pipe-arrow" aria-hidden="true"><svg width="32" height="16" viewBox="0 0 32 16"><path d="M0 8h28M22 2l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></div>
+        <div class="pipe-step">
+          <div class="pipe-icon">
+            <img src="gif/clawd-happy.gif" alt="" width="36" height="36" style="border-radius:8px" />
+          </div>
+          <h4 data-i18n="hiw.anim">Animation</h4>
+          <p data-i18n="hiw.animDesc">Clyde switches to the matching SVG animation</p>
+        </div>
+      </div>
+      <div class="terminal-block anim">
+        <div class="terminal-dots"><span></span><span></span><span></span></div>
+        <pre><code><span class="t-method">POST</span> <span class="t-url">/state</span> <span class="t-brace">{</span>
+  <span class="t-key">"state"</span>: <span class="t-val">"working"</span>,
+  <span class="t-key">"session_id"</span>: <span class="t-val">"abc-123"</span>,
+  <span class="t-key">"event"</span>: <span class="t-val">"PreToolUse"</span>
+<span class="t-brace">}</span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== MULTI-AGENT ========== -->
+  <section id="agents">
+    <div class="container">
+      <div class="section-header anim">
+        <h2 data-i18n="agents.title">Three agents, one pet</h2>
+        <p data-i18n="agents.sub">All three can run simultaneously. Clyde tracks each session independently.</p>
+      </div>
+      <div class="agents-grid">
+        <div class="agent-card anim">
+          <div class="agent-icon">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5"><path d="M12 2a7 7 0 0 1 7 7v1a7 7 0 0 1-14 0V9a7 7 0 0 1 7-7z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><circle cx="9" cy="10" r="1" fill="var(--accent)"/><circle cx="15" cy="10" r="1" fill="var(--accent)"/><path d="M5 19v2h14v-2"/></svg>
+          </div>
+          <h3>Claude Code</h3>
+          <p data-i18n="agents.claude">Zero-config hooks, permission bubbles, real-time mode tracking</p>
+        </div>
+        <div class="agent-card anim">
+          <div class="agent-icon">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5"><rect x="2" y="3" width="20" height="18" rx="3"/><path d="M7 8l4 4-4 4"/><line x1="13" y1="16" x2="17" y2="16"/></svg>
+          </div>
+          <h3>Codex CLI</h3>
+          <p data-i18n="agents.codex">Automatic JSONL log polling from ~/.codex/sessions/</p>
+        </div>
+        <div class="agent-card anim">
+          <div class="agent-icon">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </div>
+          <h3>Copilot CLI</h3>
+          <p data-i18n="agents.copilot">Auto-configured when ~/.copilot exists</p>
+        </div>
+      </div>
+      <div class="callout anim">
+        <strong data-i18n="agents.multiTitle">Multi-session intelligence:</strong>
+        <span data-i18n="agents.multiDesc">The highest-priority state across all sessions wins. 1 subagent = juggling, 2+ = conducting.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== PERMISSIONS ========== -->
+  <section id="permissions">
+    <div class="container">
+      <div class="perm-layout anim">
+        <div class="perm-text">
+          <h2 data-i18n="perm.title">Approve tools without leaving your flow</h2>
+          <p data-i18n="perm.desc">When Claude Code requests tool permissions, Clyde pops a floating card near the pet. Allow, deny, or apply a suggestion rule. If you answer in the terminal first, the bubble auto-dismisses.</p>
+          <div class="perm-modes">
+            <div class="perm-mode"><span class="perm-icon">&#x1F512;</span><strong data-i18n="perm.default">Default</strong><small data-i18n="perm.defaultDesc">Requires approval</small></div>
+            <div class="perm-mode"><span class="perm-icon">&#x270F;&#xFE0F;</span><strong data-i18n="perm.accept">Accept Edits</strong><small data-i18n="perm.acceptDesc">Edits auto-approved</small></div>
+            <div class="perm-mode"><span class="perm-icon">&#x26A1;</span><strong data-i18n="perm.bypass">Bypass</strong><small data-i18n="perm.bypassDesc">No approval needed</small></div>
+            <div class="perm-mode"><span class="perm-icon">&#x1F4CB;</span><strong data-i18n="perm.plan">Plan Only</strong><small data-i18n="perm.planDesc">No tool execution</small></div>
+          </div>
+        </div>
+        <div class="perm-visual">
+          <div class="perm-bubble-mock">
+            <div class="pbm-header"><span>Permission Request</span><span class="pbm-badge">BASH</span></div>
+            <div class="pbm-code"><code>command: echo "hello world"</code></div>
+            <div class="pbm-actions"><button class="pbm-allow">Allow</button><button class="pbm-deny">Deny</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== MINI MODE ========== -->
+  <section id="mini">
+    <div class="container mini-layout anim">
+      <div class="mini-gifs">
+        <img src="gif/clawd-mini-idle.gif" alt="Mini idle" loading="lazy" class="mini-gif" />
+        <img src="gif/clawd-mini-peek.gif" alt="Mini peek" loading="lazy" class="mini-gif" />
+        <img src="gif/clawd-mini-happy.gif" alt="Mini happy" loading="lazy" class="mini-gif" />
+      </div>
+      <div class="mini-text">
+        <h2 data-i18n="mini.title">Stays out of the way</h2>
+        <ul>
+          <li data-i18n="mini.drag">Drag to screen edge for mini mode</li>
+          <li data-i18n="mini.peek">Peeks out when you hover</li>
+          <li data-i18n="mini.alerts">Shows mini alerts while tucked away</li>
+          <li data-i18n="mini.dblclick">Double-click to poke, 4 clicks to flail</li>
+          <li data-i18n="mini.menu">Right-click for sessions, DND, resize</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== DOWNLOAD ========== -->
+  <section id="download">
+    <div class="container">
+      <div class="section-header anim">
+        <h2 data-i18n="dl.title">Get Clyde on your desk</h2>
+        <p data-i18n="dl.sub">Free, open-source, ~5 MB. Available for Windows, macOS, and Linux.</p>
+      </div>
+      <div class="download-buttons anim">
+        <a href="https://github.com/QingJ01/Clyde/releases/latest" target="_blank" rel="noopener" class="dl-btn">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.557A3.556 3.556 0 0 1 6.557 2h10.886A3.556 3.556 0 0 1 21 5.557v10.886A3.556 3.556 0 0 1 17.443 20H14v-2h3.443A1.556 1.556 0 0 0 19 16.443V5.557A1.556 1.556 0 0 0 17.443 4H6.557A1.556 1.556 0 0 0 5 5.557V9H3V5.557zM7 10h4V7l5 5-5 5v-3H3v-4h4z"/></svg>
+          <div><strong>Windows</strong><small>.exe / .msi</small></div>
+        </a>
+        <a href="https://github.com/QingJ01/Clyde/releases/latest" target="_blank" rel="noopener" class="dl-btn">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 1.592.374 3.095 1.038 4.427L12 22l8.962-5.573A9.953 9.953 0 0 0 22 12c0-5.523-4.477-10-10-10zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16z"/></svg>
+          <div><strong>macOS</strong><small>.dmg</small></div>
+        </a>
+        <a href="https://github.com/QingJ01/Clyde/releases/latest" target="_blank" rel="noopener" class="dl-btn">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L3 7v10l9 5 9-5V7l-9-5zm0 2.18L18.82 8 12 11.82 5.18 8 12 4.18zM5 9.82l6 3.33v6.03l-6-3.33V9.82zm8 9.36v-6.03l6-3.33v6.03l-6 3.33z"/></svg>
+          <div><strong>Linux</strong><small>.deb / .AppImage</small></div>
+        </a>
+      </div>
+      <p class="dl-source anim" data-i18n="dl.source">Or <a href="https://github.com/QingJ01/Clyde" target="_blank" rel="noopener">build from source</a></p>
+    </div>
+  </section>
+
+  <!-- ========== FOOTER ========== -->
+  <footer>
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <img src="tray-icon.png" alt="Clyde" width="24" height="24" />
+        <span>Clyde on Desk <small>v0.1.0</small></span>
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/QingJ01/Clyde" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/QingJ01/Clyde/issues" target="_blank" rel="noopener">Issues</a>
+        <a href="https://github.com/QingJ01/Clyde/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a>
+        <a href="https://github.com/QingJ01/Clyde/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0</a>
+      </div>
+      <p class="footer-disclaimer" data-i18n="footer.disclaimer">Not affiliated with Anthropic. Clyde is a community creation.</p>
+    </div>
+  </footer>
+
+  <script src="js/main.js"></script>
+</body>
+</html>
