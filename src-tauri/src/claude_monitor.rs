@@ -84,7 +84,7 @@ pub fn start_claude_monitor(app: AppHandle, state: SharedState) {
                 // Apply the last state from this batch of new lines
                 if let Some(state_str) = last_state {
                     let (resolved, svg) = {
-                        let mut sm = state.lock().expect("state mutex poisoned");
+                        let mut sm = state.lock().unwrap_or_else(|e| e.into_inner());
                         // Only update if not already tracked by command hooks
                         // (hooks use session_id from Claude Code, monitor uses prefixed ID)
                         sm.update_session_state(&session_id, state_str, "monitor");

@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clyde 桌宠</h1>
 <p align="center">
-  实时映射 AI 编程助手工作状态的桌面宠物
+  轻量级 AI 编程桌宠，实时映射助手工作状态
   <br>
   <a href="README.md">English</a>
 </p>
@@ -41,20 +41,20 @@ npm start        # Tauri 开发模式，前端热更新
 
 12 种动画状态，由实时 Agent 事件驱动：
 
-| Agent 事件 | Clyde 的反应 | SVG |
+| Agent 事件 | Clyde 的反应 | 预览 |
 |---|---|---|
-| 空闲 | 眼球跟随鼠标，身体微倾 | `clyde-idle-follow` |
-| 提交提示词 | 思考 | `clyde-working-thinking` |
-| 工具执行中 | 打字 | `clyde-working-typing` |
-| 3+ 个会话活跃 | 建造 | `clyde-working-building` |
-| 1 个子代理 | 杂耍 | `clyde-working-juggling` |
-| 2+ 个子代理 | 指挥 | `clyde-working-conducting` |
-| 工具执行失败 | 报错闪烁 | `clyde-error` |
-| 任务完成 | 开心弹跳 | `clyde-happy` |
-| 通知 | 惊跳 | `clyde-notification` |
-| 上下文压缩 | 扫地 | `clyde-working-sweeping` |
-| 创建 Worktree | 搬箱子 | `clyde-working-carrying` |
-| 60 秒无活动 | 打哈欠 → 打盹 → 倒下 → 睡觉 | `clyde-sleeping` |
+| 空闲 | 眼球跟随鼠标，身体微倾 | <img src="assets/gif/clawd-idle.gif" width="80" /> |
+| 提交提示词 | 思考 | <img src="assets/gif/clawd-thinking.gif" width="80" /> |
+| 工具执行中 | 打字 | <img src="assets/gif/clawd-typing.gif" width="80" /> |
+| 3+ 个会话活跃 | 建造 | <img src="assets/gif/clawd-building.gif" width="80" /> |
+| 1 个子代理 | 杂耍 | <img src="assets/gif/clawd-juggling.gif" width="80" /> |
+| 2+ 个子代理 | 指挥 | <img src="assets/gif/clawd-conducting.gif" width="80" /> |
+| 工具执行失败 | 报错闪烁 | <img src="assets/gif/clawd-error.gif" width="80" /> |
+| 任务完成 | 开心弹跳 | <img src="assets/gif/clawd-happy.gif" width="80" /> |
+| 通知 | 惊跳 | <img src="assets/gif/clawd-notification.gif" width="80" /> |
+| 上下文压缩 | 扫地 | <img src="assets/gif/clawd-sweeping.gif" width="80" /> |
+| 创建 Worktree | 搬箱子 | <img src="assets/gif/clawd-carrying.gif" width="80" /> |
+| 60 秒无活动 | 打哈欠 → 打盹 → 倒下 → 睡觉 | <img src="assets/gif/clawd-sleeping.gif" width="80" /> |
 
 ### 交互
 

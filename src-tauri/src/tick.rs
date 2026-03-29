@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use serde::Serialize;
-use crate::prefs::SharedPrefs;
+use crate::util::MutexExt;
 use crate::state_machine::SharedState;
 use crate::windows::{compute_hit_rect, get_pet_bounds, HitBox};
 
@@ -64,12 +64,12 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
                 last_y = cy;
             }
 
-            let state_str = state.lock().expect("state mutex poisoned").current_state.clone();
+            let state_str = state.lock_or_recover().current_state.clone();
             let is_sleep_state = matches!(state_str.as_str(), "yawning" | "dozing" | "collapsing" | "sleeping");
 
             // Single lock acquisition per tick for TickState
             let (should_yawn, should_wake) = {
-                let mut ts = tick_clone.lock().expect("tick state mutex poisoned");
+                let mut ts = tick_clone.lock_or_recover();
                 if moved {
                     ts.mouse_still_since = Instant::now();
                     ts.has_triggered_yawn = false;
@@ -96,16 +96,15 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
             // Mini mode hover peek: detect mouse near pet in mini mode.
             // Single lock acquisition for all peek state reads/writes.
             {
-                let is_mini = app.try_state::<SharedPrefs>()
-                    .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
-                    .unwrap_or(false);
+                let is_mini = crate::prefs::is_mini_mode(&app);
                 if is_mini {
                     if let Some(bounds) = get_pet_bounds(&app) {
-                        let near = cx >= (bounds.x - 30) as f64
+                        // Symmetric 10px margin around pet for peek detection
+                        let near = cx >= (bounds.x - 10) as f64
                             && cx <= (bounds.x + bounds.width as i32 + 10) as f64
                             && cy >= bounds.y as f64
                             && cy <= (bounds.y + bounds.height as i32) as f64;
-                        let mut ts = tick_clone.lock().expect("tick state mutex poisoned");
+                        let mut ts = tick_clone.lock_or_recover();
                         let was_peeking = ts.is_peeking;
                         if near && !was_peeking {
                             ts.is_peeking = true;
@@ -118,7 +117,7 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
                         }
                     }
                 } else {
-                    tick_clone.lock().expect("tick state mutex poisoned").is_peeking = false;
+                    tick_clone.lock_or_recover().is_peeking = false;
                 }
             }
 
@@ -135,7 +134,7 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
                     let dy = (raw_dy / dist * 3.0).clamp(-3.0, 3.0);
 
                     let should_emit = {
-                        let mut ts = tick_clone.lock().expect("tick state mutex poisoned");
+                        let mut ts = tick_clone.lock_or_recover();
                         if (dx - ts.last_eye_dx).abs() > 0.1 || (dy - ts.last_eye_dy).abs() > 0.1 {
                             ts.last_eye_dx = dx;
                             ts.last_eye_dy = dy;

@@ -1,6 +1,7 @@
 use std::time::Duration;
 use tauri::{AppHandle, Manager, PhysicalPosition};
 use crate::prefs::{self, SharedPrefs};
+use crate::util::MutexExt;
 use crate::state_machine::SharedState;
 use crate::windows::get_pet_bounds;
 use crate::{emit_state, sync_hit};
@@ -50,7 +51,7 @@ impl EdgeSnap {
 pub fn do_exit_mini(app: &AppHandle) -> bool {
     let Some(prefs_state) = app.try_state::<SharedPrefs>() else { return false };
     let (was_mini, pre_x, pre_y) = {
-        let mut p = prefs_state.lock().expect("prefs mutex poisoned");
+        let mut p = prefs_state.lock_or_recover();
         if !p.mini_mode { return false; }
         p.mini_mode = false;
         let pos = (true, p.pre_mini_x, p.pre_mini_y);
@@ -63,7 +64,7 @@ pub fn do_exit_mini(app: &AppHandle) -> bool {
     }
     // Restore the real state from the state machine instead of hardcoding idle
     let (resolved, svg) = if let Some(state) = app.try_state::<SharedState>() {
-        let sm = state.lock().expect("state mutex poisoned");
+        let sm = state.lock_or_recover();
         let r = sm.resolve_display_state();
         let s = sm.svg_for_state(&r);
         (r, s)
@@ -96,7 +97,7 @@ pub fn do_enter_mini(app: &AppHandle) -> bool {
     };
 
     {
-        let mut p = prefs_state.lock().expect("prefs mutex poisoned");
+        let mut p = prefs_state.lock_or_recover();
         p.pre_mini_x = cur_x;
         p.pre_mini_y = cur_y;
         p.mini_mode = true;

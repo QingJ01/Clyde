@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
+use crate::util::MutexExt;
 
 pub type SharedPrefs = Arc<Mutex<Prefs>>;
 
@@ -19,8 +20,20 @@ pub struct Prefs {
     #[serde(default)] pub bubble_follow_pet: bool,
 }
 
+/// Default pet dimension (pixels) when bounds are unavailable.
+pub const DEFAULT_PET_DIMENSION: u32 = 200;
+/// Default screen size fallback when monitor info is unavailable.
+pub const DEFAULT_SCREEN_SIZE: (u32, u32) = (1920, 1080);
+
 pub fn size_to_pixels(size: &str) -> (u32, u32) {
     match size { "M" => (280, 280), "L" => (360, 360), _ => (200, 200) }
+}
+
+/// Check if mini mode is currently active. Returns false if state is unavailable.
+pub fn is_mini_mode(app: &AppHandle) -> bool {
+    app.try_state::<SharedPrefs>()
+        .map(|p| p.lock_or_recover().mini_mode)
+        .unwrap_or(false)
 }
 
 fn default_size() -> String { "S".into() }

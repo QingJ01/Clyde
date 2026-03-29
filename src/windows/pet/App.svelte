@@ -126,4 +126,10 @@
     width: 100%;
     height: 100%;
   }
+  /* Smooth eye/body tracking — interpolate between 50ms tick updates */
+  .svg-wrapper :global(#eyes-js),
+  .svg-wrapper :global(#body-js),
+  .svg-wrapper :global(#shadow-js) {
+    transition: transform 80ms ease-out;
+  }
 </style>

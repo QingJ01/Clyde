@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clyde on Desk</h1>
 <p align="center">
-  A desktop pet that mirrors your AI coding agent in real time
+  A lightweight desktop pet that mirrors your AI coding agent in real time
   <br>
   <a href="README.zh-CN.md">中文版</a>
 </p>
@@ -41,20 +41,20 @@ npm start        # Tauri dev mode with hot-reload
 
 12 animated states driven by real-time agent events:
 
-| Agent Event | Clyde Does | SVG |
+| Agent Event | Clyde Does | Preview |
 |---|---|---|
-| Idle | Follows your cursor (eye tracking + body lean) | `clyde-idle-follow` |
-| UserPromptSubmit | Thinking | `clyde-working-thinking` |
-| PreToolUse | Typing | `clyde-working-typing` |
-| 3+ sessions active | Building | `clyde-working-building` |
-| 1 subagent | Juggling | `clyde-working-juggling` |
-| 2+ subagents | Conducting | `clyde-working-conducting` |
-| PostToolUseFailure | Error flash | `clyde-error` |
-| Stop (task complete) | Happy bounce | `clyde-happy` |
-| Notification | Alert jump | `clyde-notification` |
-| PreCompact | Sweeping | `clyde-working-sweeping` |
-| WorktreeCreate | Carrying box | `clyde-working-carrying` |
-| 60s no activity | Yawn → doze → collapse → sleep | `clyde-sleeping` |
+| Idle | Follows your cursor (eye tracking + body lean) | <img src="assets/gif/clawd-idle.gif" width="80" /> |
+| UserPromptSubmit | Thinking | <img src="assets/gif/clawd-thinking.gif" width="80" /> |
+| PreToolUse | Typing | <img src="assets/gif/clawd-typing.gif" width="80" /> |
+| 3+ sessions active | Building | <img src="assets/gif/clawd-building.gif" width="80" /> |
+| 1 subagent | Juggling | <img src="assets/gif/clawd-juggling.gif" width="80" /> |
+| 2+ subagents | Conducting | <img src="assets/gif/clawd-conducting.gif" width="80" /> |
+| PostToolUseFailure | Error flash | <img src="assets/gif/clawd-error.gif" width="80" /> |
+| Stop (task complete) | Happy bounce | <img src="assets/gif/clawd-happy.gif" width="80" /> |
+| Notification | Alert jump | <img src="assets/gif/clawd-notification.gif" width="80" /> |
+| PreCompact | Sweeping | <img src="assets/gif/clawd-sweeping.gif" width="80" /> |
+| WorktreeCreate | Carrying box | <img src="assets/gif/clawd-carrying.gif" width="80" /> |
+| 60s no activity | Yawn → doze → collapse → sleep | <img src="assets/gif/clawd-sleeping.gif" width="80" /> |
 
 ### Interaction
 

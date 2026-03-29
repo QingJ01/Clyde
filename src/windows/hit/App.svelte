@@ -39,8 +39,16 @@
     invoke('drag_move', { x: toPhys(e.screenX), y: toPhys(e.screenY) });
   }
 
-  function onPointerUp(_e: PointerEvent) {
+  function onPointerUp(e: PointerEvent) {
+    (e.target as Element).releasePointerCapture(e.pointerId);
     invoke('drag_end');
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      invoke('hit_double_click');
+    }
   }
 
   function onContextMenu(e: MouseEvent) {
@@ -55,8 +63,10 @@
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
   oncontextmenu={onContextMenu}
+  onkeydown={onKeyDown}
   role="button"
   tabindex="0"
+  aria-label="Clyde desktop pet"
 ></div>
 
 <style>

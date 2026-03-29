@@ -25,6 +25,14 @@ impl SessionEntry {
     }
 }
 
+/// Priority of each state for display resolution.
+/// NOTE: Event-to-state mappings are defined in multiple locations:
+///   1. hooks/clyde-hook.js    — EVENT_TO_STATE (Claude Code hook events → states)
+///   2. hooks/copilot-hook.js  — EVENT_TO_STATE (Copilot hook events → states)
+///   3. state_machine.rs       — state_priority() + svg_for_state() (state → priority/SVG)
+///   4. codex_monitor.rs       — map_codex_event() (Codex JSONL events → states)
+///   5. claude_monitor.rs      — map_claude_event() (Claude session events → states)
+/// When adding a new state, update ALL locations above.
 pub fn state_priority(s: &str) -> u8 {
     match s {
         "error"        => 8,

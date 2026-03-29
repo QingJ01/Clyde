@@ -5,6 +5,7 @@ use tauri::{
     AppHandle, Emitter, Manager,
 };
 use crate::i18n::t;
+use crate::util::MutexExt;
 use crate::mini;
 use crate::prefs::{self, SharedPrefs};
 use crate::state_machine::SharedState;
@@ -20,8 +21,10 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
     let size_l = MenuItem::with_id(app, "size-l", "L",               true, None::<&str>)?;
     let size_sub = Submenu::with_items(app, t("size", lang), true, &[&size_s, &size_m, &size_l])?;
 
-    let lang_en = MenuItem::with_id(app, "lang-en", "English", true, None::<&str>)?;
-    let lang_zh = MenuItem::with_id(app, "lang-zh", "中文",    true, None::<&str>)?;
+    let en_label = if lang == "en" { "✓ English" } else { "English" };
+    let zh_label = if lang == "zh" { "✓ 中文" } else { "中文" };
+    let lang_en = MenuItem::with_id(app, "lang-en", en_label, true, None::<&str>)?;
+    let lang_zh = MenuItem::with_id(app, "lang-zh", zh_label, true, None::<&str>)?;
     let lang_sub = Submenu::with_items(app, t("language", lang), true, &[&lang_en, &lang_zh])?;
 
     let mini = MenuItem::with_id(app, "mini", t("mini", lang), true, None::<&str>)?;
@@ -45,7 +48,7 @@ pub fn build_tray(app: &AppHandle, lang: &str) -> tauri::Result<TrayIcon> {
 
 pub fn rebuild_menu(app: &AppHandle, lang: &str) {
     if let Some(tray_state) = app.try_state::<SharedTray>() {
-        let guard = tray_state.lock().expect("tray mutex poisoned");
+        let guard = tray_state.lock_or_recover();
         if let Some(tray) = guard.as_ref() {
             match build_menu(app, lang) {
                 Ok(menu) => { let _ = tray.set_menu(Some(menu)); }
@@ -66,7 +69,7 @@ fn apply_size(app: &AppHandle, size_str: &str) {
         }
     }
     if let Some(prefs_state) = app.try_state::<SharedPrefs>() {
-        let mut p = prefs_state.lock().expect("prefs mutex poisoned");
+        let mut p = prefs_state.lock_or_recover();
         p.size = size_str.to_string();
         prefs::save(app, &p);
     }
@@ -76,7 +79,7 @@ fn apply_size(app: &AppHandle, size_str: &str) {
 pub fn apply_lang_pub(app: &AppHandle, lang: &str) { apply_lang(app, lang); }
 fn apply_lang(app: &AppHandle, lang: &str) {
     if let Some(prefs_state) = app.try_state::<SharedPrefs>() {
-        let mut p = prefs_state.lock().expect("prefs mutex poisoned");
+        let mut p = prefs_state.lock_or_recover();
         p.lang = lang.to_string();
         prefs::save(app, &p);
     }
@@ -94,16 +97,13 @@ fn handle_tray_event(app: &AppHandle, id: &str) {
         },
         "autostart" => {
             if let Some(prefs_state) = app.try_state::<SharedPrefs>() {
-                let mut p = prefs_state.lock().expect("prefs mutex poisoned");
+                let mut p = prefs_state.lock_or_recover();
                 p.auto_start_with_claude = !p.auto_start_with_claude;
                 prefs::save(app, &p);
             }
         },
         "mini" => {
-            let is_mini = app.try_state::<SharedPrefs>()
-                .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
-                .unwrap_or(false);
-            if is_mini {
+            if prefs::is_mini_mode(app) {
                 mini::do_exit_mini(app);
             } else {
                 mini::do_enter_mini(app);

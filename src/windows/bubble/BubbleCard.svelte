@@ -65,18 +65,19 @@
   {/if}
 
   <div class="actions">
-    {#if !isElicitation}
-      <button class="btn btn-allow" onclick={allow}>Allow</button>
+    {#if isElicitation}
+      <button class="btn btn-allow" onclick={goTerminal} aria-label="Go to terminal to respond">Go to Terminal</button>
+      <button class="btn btn-deny" onclick={deny} aria-label="Dismiss notification">Dismiss</button>
+    {:else}
+      <button class="btn btn-allow" onclick={allow} aria-label="Allow permission">Allow</button>
+      <button class="btn btn-deny" onclick={deny} aria-label="Deny permission">Deny</button>
     {/if}
-    <button class="btn btn-deny" onclick={isElicitation ? goTerminal : deny}>
-      {isElicitation ? 'Go to Terminal' : 'Deny'}
-    </button>
   </div>
 
   {#if suggestions.length > 0}
     <div class="suggestions">
       {#each suggestions as sug}
-        <button class="suggestion" onclick={() => applySuggestion(String(sug))}>
+        <button class="suggestion" onclick={() => applySuggestion(String(sug))} aria-label="Apply suggestion: {String(sug)}">
           {String(sug)}
         </button>
       {/each}
@@ -191,6 +192,11 @@
     transform: translateY(0);
   }
 
+  .btn:focus-visible {
+    outline: 2px solid #c78650;
+    outline-offset: 2px;
+  }
+
   .suggestions {
     display: flex;
     flex-direction: column;
@@ -215,5 +221,9 @@
     background: rgba(255, 255, 255, 0.08);
     color: #c4c4cc;
     border-color: rgba(255, 255, 255, 0.12);
+  }
+  .suggestion:focus-visible {
+    outline: 2px solid #c78650;
+    outline-offset: 1px;
   }
 </style>

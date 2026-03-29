@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use tauri::AppHandle;
 use crate::state_machine::{SharedState, ONESHOT_STATES};
+use crate::util::MutexExt;
 use crate::permission;
 
 pub const CLYDE_SERVER_HEADER: &str = "x-clyde-server";
@@ -65,7 +66,7 @@ async fn post_state(
     let event = payload.event.unwrap_or_default();
 
     let (new_state, new_svg) = {
-        let mut sm = ctx.state.lock().expect("state mutex poisoned");
+        let mut sm = ctx.state.lock_or_recover();
         // DND mode: skip state updates except SessionEnd
         if sm.dnd && event != "SessionEnd" {
             let mut headers = HeaderMap::new();
@@ -102,8 +103,9 @@ async fn post_state(
 
     crate::emit_state(&ctx.app, &new_state, &new_svg);
 
-    // Auto-focus terminal on notification/attention states
-    if matches!(payload.state.as_str(), "notification" | "attention") {
+    // Auto-focus terminal only on "attention" (task complete).
+    // "notification" is informational — don't steal focus for it.
+    if payload.state == "attention" {
         if let Some(pid) = payload.source_pid {
             crate::focus::focus_window_by_pid(pid, payload.cwd.as_deref().unwrap_or(""));
         }
@@ -150,7 +152,7 @@ async fn post_permission(
     if !bubble_opened {
         return (StatusCode::OK, headers, Json(perm_response("deny")));
     }
-    ctx.pending_perms.lock().expect("perms mutex poisoned").insert(entry_id.clone(), tx);
+    ctx.pending_perms.lock_or_recover().insert(entry_id.clone(), tx);
 
     // Wait for user to click in bubble, or timeout.
     // Auto-close: a background watcher (see spawn below) checks if the HTTP client
@@ -170,12 +172,12 @@ async fn post_permission(
             if tokio::time::Instant::now() > deadline { break; }
             // Check if the entry was already resolved
             let still_pending = watchdog_ctx.pending_perms
-                .lock().expect("perms mutex poisoned")
+                .lock_or_recover()
                 .contains_key(&watchdog_id);
             if !still_pending { return; } // resolved by user click — nothing to do
         }
         // Timeout: close bubble and send default deny
-        if let Some(tx) = watchdog_ctx.pending_perms.lock().expect("perms mutex poisoned").remove(&watchdog_id) {
+        if let Some(tx) = watchdog_ctx.pending_perms.lock_or_recover().remove(&watchdog_id) {
             let _ = tx.send(PermDecision { behavior: "deny".into() });
         }
         permission::close_bubble(&watchdog_ctx.app, &watchdog_ctx.bubble_map, &watchdog_id);
@@ -185,7 +187,7 @@ async fn post_permission(
 
     // Clean up
     watchdog.abort();
-    ctx.pending_perms.lock().expect("perms mutex poisoned").remove(&entry_id);
+    ctx.pending_perms.lock_or_recover().remove(&entry_id);
     permission::close_bubble(&ctx.app, &ctx.bubble_map, &entry_id);
 
     (StatusCode::OK, headers, Json(perm_response(&decision.behavior)))
@@ -252,7 +254,7 @@ pub fn resolve_permission(
     decision: String,
     suggestion: Option<String>,
 ) {
-    let tx = { pending.lock().expect("perms mutex poisoned").remove(&id) };
+    let tx = { pending.lock_or_recover().remove(&id) };
     if let Some(tx) = tx {
         // If a suggestion was selected, use it as the behavior; otherwise use the decision.
         let behavior = suggestion.unwrap_or(decision);

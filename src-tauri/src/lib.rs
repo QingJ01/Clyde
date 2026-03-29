@@ -11,6 +11,7 @@ mod codex_monitor;
 mod claude_monitor;
 mod permission;
 mod focus;
+mod util;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -19,6 +20,14 @@ use tauri::window::Color;
 use state_machine::{SharedState, StateMachine};
 use http_server::PendingPerms;
 use prefs::SharedPrefs;
+use util::MutexExt;
+
+// Animation duration constants (milliseconds)
+const YAWN_DURATION_MS: u64 = 3000;
+const DOZE_DURATION_MS: u64 = 4000;
+const COLLAPSE_DURATION_MS: u64 = 3000;
+const WAKE_DURATION_MS: u64 = 1500;
+const MINI_IDLE_DELAY_MS: u64 = 500;
 /// Shared task handle for sleep sequence, wake animation, and mini-enter delayed tasks.
 /// Any new sleep/wake/mini transition should cancel the previous one.
 pub type SleepAbortHandle = Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>;
@@ -38,7 +47,7 @@ const DRAG_THRESHOLD: f64 = 3.0;
 
 #[tauri::command]
 fn drag_start(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
-    let mut d = drag.lock().expect("drag mutex poisoned");
+    let mut d = drag.lock_or_recover();
     // Always set active so drag_end runs (for click detection, sync_hit, etc.).
     // If pet bounds are unavailable (rare, e.g. during animation), use last known or 0,0.
     d.active        = true;
@@ -56,7 +65,7 @@ fn drag_start(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
 #[tauri::command]
 fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     let (active, dragging, base_x, base_y, smx, smy) = {
-        let d = drag.lock().expect("drag mutex poisoned");
+        let d = drag.lock_or_recover();
         (d.active, d.dragging, d.start_win_x, d.start_win_y, d.start_mouse_x, d.start_mouse_y)
     };
     if !active { return; }
@@ -67,7 +76,7 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     // Don't start moving until the mouse has moved past the drag threshold
     if !dragging {
         if (dx * dx + dy * dy).sqrt() < DRAG_THRESHOLD { return; }
-        drag.lock().expect("drag mutex poisoned").dragging = true;
+        drag.lock_or_recover().dragging = true;
     }
 
     let mut new_x = base_x + dx as i32;
@@ -75,8 +84,8 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
 
     // Query pet bounds once for both clamp and hit-window sync
     let bounds = windows::get_pet_bounds(&app);
-    let pet_w = bounds.as_ref().map(|b| b.width).unwrap_or(200);
-    let pet_h = bounds.as_ref().map(|b| b.height).unwrap_or(200);
+    let pet_w = bounds.as_ref().map(|b| b.width).unwrap_or(prefs::DEFAULT_PET_DIMENSION);
+    let pet_h = bounds.as_ref().map(|b| b.height).unwrap_or(prefs::DEFAULT_PET_DIMENSION);
 
     // Clamp to screen bounds: keep at least 30px of the pet visible
     if let Some(monitor) = app.primary_monitor().ok().flatten() {
@@ -98,16 +107,14 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
 #[tauri::command]
 fn drag_end(app: AppHandle, drag: tauri::State<SharedDrag>, abort_handle: tauri::State<'_, SleepAbortHandle>) {
     let was_dragging = {
-        let mut d = drag.lock().expect("drag mutex poisoned");
+        let mut d = drag.lock_or_recover();
         let dragging = d.dragging;
         d.active = false;
         d.dragging = false;
         dragging
     };
 
-    let is_mini = app.try_state::<SharedPrefs>()
-        .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
-        .unwrap_or(false);
+    let is_mini = prefs::is_mini_mode(&app);
 
     if is_mini {
         if !was_dragging {
@@ -128,10 +135,10 @@ fn drag_end(app: AppHandle, drag: tauri::State<SharedDrag>, abort_handle: tauri:
             cancel_pending_task(&abort_handle);
             let app2 = app.clone();
             let handle = tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(MINI_IDLE_DELAY_MS)).await;
                 emit_state(&app2, "mini-idle", "clyde-mini-idle.svg");
             });
-            *abort_handle.lock().expect("task handle mutex poisoned") = Some(handle);
+            *abort_handle.lock_or_recover() = Some(handle);
         }
     } else {
         // Normal click or drag end — sync hit window
@@ -147,9 +154,7 @@ fn exit_mini_mode(app: AppHandle, abort_handle: tauri::State<'_, SleepAbortHandl
 
 #[tauri::command]
 fn hit_double_click(app: AppHandle, abort_handle: tauri::State<'_, SleepAbortHandle>) {
-    let is_mini = app.try_state::<SharedPrefs>()
-        .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
-        .unwrap_or(false);
+    let is_mini = prefs::is_mini_mode(&app);
     if is_mini {
         cancel_pending_task(&abort_handle);
         mini::do_exit_mini(&app);
@@ -175,13 +180,13 @@ fn hit_flail(app: AppHandle) {
 fn show_context_menu(app: AppHandle, state: tauri::State<'_, SharedState>, prefs: tauri::State<SharedPrefs>) {
     use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
 
-    let lang = prefs.lock().expect("prefs mutex poisoned").lang.clone();
-    let is_dnd = state.lock().expect("state mutex poisoned").dnd;
+    let lang = prefs.lock_or_recover().lang.clone();
+    let is_dnd = state.lock_or_recover().dnd;
 
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
 
     // Session list
-    let sessions = state.lock().expect("state mutex poisoned").session_summaries();
+    let sessions = state.lock_or_recover().session_summaries();
     if sessions.is_empty() {
         let no = MenuItem::with_id(&app, "ctx-none", i18n::t("noSessions", &lang), false, None::<&str>).unwrap();
         items.push(Box::new(no));
@@ -215,7 +220,7 @@ fn show_context_menu(app: AppHandle, state: tauri::State<'_, SharedState>, prefs
     }
 
     // Mini mode
-    let is_mini = prefs.lock().expect("prefs mutex poisoned").mini_mode;
+    let is_mini = prefs.lock_or_recover().mini_mode;
     let mini_label = if is_mini {
         format!("✓ {}", i18n::t("mini", &lang))
     } else {
@@ -236,10 +241,12 @@ fn show_context_menu(app: AppHandle, state: tauri::State<'_, SharedState>, prefs
         }
     }
 
-    // Language submenu
+    // Language submenu (with checkmark on current selection)
+    let en_label = if lang == "en" { "✓ English" } else { "English" };
+    let zh_label = if lang == "zh" { "✓ 中文" } else { "中文" };
     if let (Ok(en), Ok(zh)) = (
-        MenuItem::with_id(&app, "ctx-lang-en", "English", true, None::<&str>),
-        MenuItem::with_id(&app, "ctx-lang-zh", "中文", true, None::<&str>),
+        MenuItem::with_id(&app, "ctx-lang-en", en_label, true, None::<&str>),
+        MenuItem::with_id(&app, "ctx-lang-zh", zh_label, true, None::<&str>),
     ) {
         if let Ok(sub) = Submenu::with_items(&app, i18n::t("language", &lang), true, &[&en, &zh]) {
             items.push(Box::new(sub));
@@ -275,7 +282,7 @@ fn mini_peek_out(app: AppHandle) {
 /// Shared DND toggle — used from tauri command, context menu, and tray handler.
 pub(crate) fn do_toggle_dnd(app: &AppHandle, state: &SharedState) {
     let new_dnd = {
-        let mut sm = state.lock().expect("state mutex poisoned");
+        let mut sm = state.lock_or_recover();
         sm.dnd = !sm.dnd;
         sm.dnd
     };
@@ -289,9 +296,7 @@ fn toggle_dnd(app: AppHandle, state: tauri::State<'_, SharedState>) {
 
 pub(crate) fn emit_state(app: &AppHandle, state_str: &str, svg: &str) {
     let flip = is_left_mini(app);
-    let is_mini = app.try_state::<SharedPrefs>()
-        .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
-        .unwrap_or(false);
+    let is_mini = prefs::is_mini_mode(&app);
 
     // In mini mode, map normal states to mini SVGs so the pet shows real-time status
     let (out_state, out_svg) = if is_mini && !state_str.starts_with("mini-") {
@@ -322,9 +327,7 @@ fn mini_svg_for_state(state: &str) -> (&'static str, &'static str) {
 
 /// Check if currently in left-side mini mode.
 fn is_left_mini(app: &AppHandle) -> bool {
-    let is_mini = app.try_state::<SharedPrefs>()
-        .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
-        .unwrap_or(false);
+    let is_mini = prefs::is_mini_mode(&app);
     if !is_mini { return false; }
     mini::should_snap_to_edge(app)
         .map(|s| s.side == mini::SnapSide::Left)
@@ -348,7 +351,7 @@ pub(crate) fn update_session_and_emit(
     event: &str,
 ) {
     let (resolved, svg) = {
-        let mut sm = state.lock().expect("state mutex poisoned");
+        let mut sm = state.lock_or_recover();
         if event == "SessionEnd" {
             sm.handle_session_end(session_id);
         } else {
@@ -366,7 +369,7 @@ pub(crate) fn update_session_and_emit(
 /// Atomically update state machine and emit to frontend.
 fn transition(app: &AppHandle, state: &SharedState, state_str: &str, svg: &str) {
     {
-        let mut sm = state.lock().expect("state mutex poisoned");
+        let mut sm = state.lock_or_recover();
         sm.current_state = state_str.into();
         sm.current_svg = svg.into();
     }
@@ -374,7 +377,7 @@ fn transition(app: &AppHandle, state: &SharedState, state_str: &str, svg: &str) 
 }
 
 fn cancel_pending_task(handle: &SleepAbortHandle) {
-    if let Some(old) = handle.lock().expect("task handle mutex poisoned").take() {
+    if let Some(old) = handle.lock_or_recover().take() {
         old.abort();
     }
 }
@@ -388,29 +391,29 @@ fn trigger_sleep_sequence(app: AppHandle, state: tauri::State<'_, SharedState>, 
     let app2 = app.clone();
     let state2 = state.inner().clone();
     let handle = tauri::async_runtime::spawn(async move {
-        // yawn → doze (3s)
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        if state2.lock().expect("state mutex poisoned").current_state != "yawning" { return; }
+        // yawn → doze
+        tokio::time::sleep(std::time::Duration::from_millis(YAWN_DURATION_MS)).await;
+        if state2.lock_or_recover().current_state != "yawning" { return; }
         transition(&app2, &state2, "dozing", "clyde-idle-doze.svg");
 
-        // doze → collapse (4s)
-        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-        if state2.lock().expect("state mutex poisoned").current_state != "dozing" { return; }
+        // doze → collapse
+        tokio::time::sleep(std::time::Duration::from_millis(DOZE_DURATION_MS)).await;
+        if state2.lock_or_recover().current_state != "dozing" { return; }
         transition(&app2, &state2, "collapsing", "clyde-collapse-sleep.svg");
 
-        // collapse → sleeping (3s)
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        if state2.lock().expect("state mutex poisoned").current_state != "collapsing" { return; }
+        // collapse → sleeping
+        tokio::time::sleep(std::time::Duration::from_millis(COLLAPSE_DURATION_MS)).await;
+        if state2.lock_or_recover().current_state != "collapsing" { return; }
         transition(&app2, &state2, "sleeping", "clyde-sleeping.svg");
     });
-    *abort_handle.lock().expect("task handle mutex poisoned") = Some(handle);
+    *abort_handle.lock_or_recover() = Some(handle);
 }
 
 #[tauri::command]
 fn trigger_wake(app: AppHandle, state: tauri::State<'_, SharedState>, abort_handle: tauri::State<'_, SleepAbortHandle>) {
     cancel_pending_task(&abort_handle);
 
-    let current = state.lock().expect("state mutex poisoned").current_state.clone();
+    let current = state.lock_or_recover().current_state.clone();
     if !matches!(current.as_str(), "yawning" | "dozing" | "collapsing" | "sleeping") {
         return;
     }
@@ -420,11 +423,11 @@ fn trigger_wake(app: AppHandle, state: tauri::State<'_, SharedState>, abort_hand
     let app2 = app.clone();
     let state2 = state.inner().clone();
     let handle = tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-        if state2.lock().expect("state mutex poisoned").current_state != "waking" { return; }
+        tokio::time::sleep(std::time::Duration::from_millis(WAKE_DURATION_MS)).await;
+        if state2.lock_or_recover().current_state != "waking" { return; }
         transition(&app2, &state2, "idle", "clyde-idle-follow.svg");
     });
-    *abort_handle.lock().expect("task handle mutex poisoned") = Some(handle);
+    *abort_handle.lock_or_recover() = Some(handle);
 }
 
 #[tauri::command]
@@ -433,7 +436,7 @@ fn set_window_size(app: AppHandle, size: String, prefs: tauri::State<SharedPrefs
         let (w, h) = prefs::size_to_pixels(&size);
         let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
         sync_hit(&app);
-        let mut p = prefs.lock().expect("prefs mutex poisoned");
+        let mut p = prefs.lock_or_recover();
         p.size = size;
         prefs::save(&app, &p);
     }
@@ -442,7 +445,7 @@ fn set_window_size(app: AppHandle, size: String, prefs: tauri::State<SharedPrefs
 #[tauri::command]
 fn set_lang(app: AppHandle, lang: String, prefs: tauri::State<SharedPrefs>) {
     {
-        let mut p = prefs.lock().expect("prefs mutex poisoned");
+        let mut p = prefs.lock_or_recover();
         p.lang = lang.clone();
         prefs::save(&app, &p);
     }
@@ -453,7 +456,7 @@ fn set_lang(app: AppHandle, lang: String, prefs: tauri::State<SharedPrefs>) {
 fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
     if let Some(session_id) = id.strip_prefix("ctx-session-") {
         // Focus terminal for this session
-        let sm = state.lock().expect("state mutex poisoned");
+        let sm = state.lock_or_recover();
         if let Some(entry) = sm.sessions.get(session_id) {
             if let Some(pid) = entry.source_pid {
                 let cwd = entry.cwd.clone();
@@ -467,10 +470,7 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
                 do_toggle_dnd(app, state);
             }
             "ctx-mini" => {
-                let is_mini = app.try_state::<SharedPrefs>()
-                    .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
-                    .unwrap_or(false);
-                if is_mini { mini::do_exit_mini(app); } else { mini::do_enter_mini(app); }
+                if prefs::is_mini_mode(app) { mini::do_exit_mini(app); } else { mini::do_enter_mini(app); }
             }
             "ctx-size-s" => tray::apply_size_pub(app, "S"),
             "ctx-size-m" => tray::apply_size_pub(app, "M"),
@@ -481,6 +481,69 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
             _ => {}
         }
     }
+}
+
+fn setup_pet_window(app: &AppHandle, prefs: &prefs::Prefs) {
+    let Some(pet) = app.get_webview_window("pet") else {
+        eprintln!("Clyde: pet window not found!");
+        return;
+    };
+    if let Err(e) = pet.set_background_color(Some(Color(0, 0, 0, 0))) {
+        eprintln!("Clyde: set_background_color failed: {e}");
+    }
+    let _ = pet.set_ignore_cursor_events(true);
+    let _ = pet.set_position(PhysicalPosition::new(prefs.x, prefs.y));
+    let (w, h) = prefs::size_to_pixels(&prefs.size);
+    let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
+    if let Err(e) = pet.show() {
+        eprintln!("Clyde: pet.show() failed: {e}");
+    }
+    println!("Clyde: pet window shown ({}x{}) at ({},{})", w, h, prefs.x, prefs.y);
+    #[cfg(debug_assertions)]
+    pet.open_devtools();
+}
+
+fn setup_hit_window(app: &AppHandle) {
+    if let Some(hit) = app.get_webview_window("hit") {
+        let _ = hit.set_background_color(Some(Color(0, 0, 0, 0)));
+    }
+    if let Some(bounds) = windows::get_pet_bounds(app) {
+        windows::sync_hit_window(app, &bounds, &windows::HitBox::DEFAULT);
+        windows::show_hit_window(app);
+        println!("Clyde: hit window synced to pet bounds");
+    } else {
+        eprintln!("Clyde: could not get pet bounds for hit window sync");
+    }
+}
+
+fn setup_tray(app: &AppHandle, prefs: &prefs::Prefs, shared_tray: &tray::SharedTray) {
+    if prefs.show_tray {
+        match tray::build_tray(app, &prefs.lang) {
+            Ok(tray_icon) => {
+                *shared_tray.lock_or_recover() = Some(tray_icon);
+                println!("Clyde: tray icon created");
+            }
+            Err(e) => eprintln!("Clyde: tray error: {e}"),
+        }
+    }
+}
+
+fn start_cleanup_loop(app: &AppHandle, state: SharedState) {
+    let state_for_cleanup = state;
+    let app_for_cleanup = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            let changed = state_for_cleanup.lock_or_recover().clean_stale();
+            if changed {
+                let sm = state_for_cleanup.lock_or_recover();
+                let resolved = sm.resolve_display_state();
+                let svg = sm.svg_for_state(&resolved);
+                emit_state(&app_for_cleanup, &resolved, &svg);
+            }
+        }
+    });
 }
 
 pub fn run() {
@@ -518,60 +581,21 @@ pub fn run() {
             focus::focus_terminal_for_session,
         ])
         .setup(move |app| {
-            // Load prefs from disk and store into managed state
             let prefs = prefs::load(app.handle());
-            *shared_prefs.lock().expect("prefs mutex poisoned") = prefs.clone();
+            *shared_prefs.lock_or_recover() = prefs.clone();
 
-            // Pet window: set transparent background + position BEFORE showing
-            if let Some(pet) = app.get_webview_window("pet") {
-                if let Err(e) = pet.set_background_color(Some(Color(0, 0, 0, 0))) {
-                    eprintln!("Clyde: set_background_color failed: {e}");
-                }
-                let _ = pet.set_ignore_cursor_events(true);
-                let _ = pet.set_position(tauri::PhysicalPosition::new(prefs.x, prefs.y));
-                let (w, h) = prefs::size_to_pixels(&prefs.size);
-                let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
-                if let Err(e) = pet.show() {
-                    eprintln!("Clyde: pet.show() failed: {e}");
-                }
-                println!("Clyde: pet window shown ({}x{}) at ({},{})", w, h, prefs.x, prefs.y);
-                #[cfg(debug_assertions)]
-                pet.open_devtools();
-            } else {
-                eprintln!("Clyde: pet window not found!");
-            }
+            setup_pet_window(app.handle(), &prefs);
+            setup_hit_window(app.handle());
+            setup_tray(app.handle(), &prefs, &shared_tray);
 
-            // Hit window: transparent background, position and show
-            if let Some(hit) = app.get_webview_window("hit") {
-                let _ = hit.set_background_color(Some(Color(0, 0, 0, 0)));
-            }
-            if let Some(bounds) = windows::get_pet_bounds(app.handle()) {
-                windows::sync_hit_window(app.handle(), &bounds, &windows::HitBox::DEFAULT);
-                windows::show_hit_window(app.handle());
-                println!("Clyde: hit window synced to pet bounds");
-            } else {
-                eprintln!("Clyde: could not get pet bounds for hit window sync");
-            }
-
-            // Build system tray
-            if prefs.show_tray {
-                match tray::build_tray(app.handle(), &prefs.lang) {
-                    Ok(tray_icon) => {
-                        *shared_tray.lock().expect("tray mutex poisoned") = Some(tray_icon);
-                        println!("Clyde: tray icon created");
-                    }
-                    Err(e) => eprintln!("Clyde: tray error: {e}"),
-                }
-            }
-
-            // Save position on close (read from managed state, no TOCTOU)
+            // Save position on close
             if let Some(pet_win) = app.get_webview_window("pet") {
                 let handle_for_close = app.handle().clone();
                 let shared_prefs_for_close = shared_prefs.clone();
                 pet_win.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { .. } = event {
                         if let Some(bounds) = windows::get_pet_bounds(&handle_for_close) {
-                            let mut p = shared_prefs_for_close.lock().expect("prefs mutex poisoned");
+                            let mut p = shared_prefs_for_close.lock_or_recover();
                             p.x = bounds.x;
                             p.y = bounds.y;
                             prefs::save(&handle_for_close, &p);
@@ -580,25 +604,26 @@ pub fn run() {
                 });
             }
 
-            let handle       = app.handle().clone();
-            let state_clone  = shared_state.clone();
-            let perms_clone  = pending_perms.clone();
-            let bubbles_clone = bubble_map.clone();
-
             // Start HTTP server + register hooks
-            tauri::async_runtime::spawn(async move {
-                match http_server::start_server(handle.clone(), state_clone, perms_clone, bubbles_clone).await {
-                    Some(port) => {
-                        let installer = hooks::HookInstaller { settings_path: None, server_port: Some(port) };
-                        if let Err(e) = installer.register() {
-                            eprintln!("Clyde: failed to register hooks: {e}");
+            {
+                let handle = app.handle().clone();
+                let state_clone = shared_state.clone();
+                let perms_clone = pending_perms.clone();
+                let bubbles_clone = bubble_map.clone();
+                tauri::async_runtime::spawn(async move {
+                    match http_server::start_server(handle.clone(), state_clone, perms_clone, bubbles_clone).await {
+                        Some(port) => {
+                            let installer = hooks::HookInstaller { settings_path: None, server_port: Some(port) };
+                            if let Err(e) = installer.register() {
+                                eprintln!("Clyde: failed to register hooks: {e}");
+                            }
+                        }
+                        None => {
+                            eprintln!("Clyde: HTTP server failed to start — skipping hook installation");
                         }
                     }
-                    None => {
-                        eprintln!("Clyde: HTTP server failed to start — skipping hook installation");
-                    }
-                }
-            });
+                });
+            }
 
             // Context menu event handling on hit window
             {
@@ -606,43 +631,15 @@ pub fn run() {
                 let state_for_menu = shared_state.clone();
                 if let Some(hit) = app.get_webview_window("hit") {
                     hit.on_menu_event(move |_win, event| {
-                        let id = event.id().as_ref();
-                        handle_context_menu_event(&app_for_menu, &state_for_menu, id);
+                        handle_context_menu_event(&app_for_menu, &state_for_menu, event.id().as_ref());
                     });
                 }
             }
 
-            // Start cursor polling (reads SharedState directly, no intermediate sync task)
             tick::start_tick(app.handle().clone(), shared_state.clone());
-
-            // Start Codex monitor
             codex_monitor::start_codex_monitor(app.handle().clone(), shared_state.clone());
-
-            // Start Claude Code session monitor (covers VS Code, Desktop, and CLI)
             claude_monitor::start_claude_monitor(app.handle().clone(), shared_state.clone());
-
-            // Start session cleanup loop (stale sessions + process liveness)
-            {
-                let state_for_cleanup = shared_state.clone();
-                let app_for_cleanup = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
-                    loop {
-                        interval.tick().await;
-                        let changed = state_for_cleanup.lock().expect("state mutex poisoned").clean_stale();
-                        if changed {
-                            let sm = state_for_cleanup.lock().expect("state mutex poisoned");
-                            let resolved = sm.resolve_display_state();
-                            let svg = sm.svg_for_state(&resolved);
-                            emit_state(&app_for_cleanup, &resolved, &svg);
-                        }
-                    }
-                });
-            }
-
-            // Startup recovery: if sessions exist (e.g., from a previous Clyde instance's
-            // runtime.json), the HTTP server is ready and hooks will fire. Prevent immediate
-            // sleep by treating startup as mouse activity.
+            start_cleanup_loop(app.handle(), shared_state.clone());
 
             Ok(())
         })
