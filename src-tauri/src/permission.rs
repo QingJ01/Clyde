@@ -48,6 +48,7 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
     match window {
         Ok(_) => {
             bubbles.lock_or_recover().insert(id, BubbleEntry { data, measured_height: 200 });
+            reposition_bubbles(app, bubbles);
             true
         }
         Err(e) => {
@@ -88,15 +89,27 @@ pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
     }
 }
 
-fn initial_bubble_position(app: &AppHandle, bubbles: &BubbleMap) -> (u32, u32) {
-    let (screen_w, screen_h) = get_work_area(app);
-    let count = bubbles.lock_or_recover().len() as u32;
+/// Calculate bubble position for a given index in the stack.
+pub fn bubble_position_for_index(screen_w: u32, screen_h: u32, index: u32, bubble_height: u32) -> (u32, u32) {
     let x = screen_w.saturating_sub(BUBBLE_WIDTH + BUBBLE_MARGIN);
-    let y = screen_h.saturating_sub(BUBBLE_MARGIN + 200 + count * (200 + BUBBLE_GAP));
+    let y = screen_h.saturating_sub(BUBBLE_MARGIN + bubble_height + index * (bubble_height + BUBBLE_GAP));
     (x, y)
 }
 
+fn initial_bubble_position(app: &AppHandle, bubbles: &BubbleMap) -> (u32, u32) {
+    let (screen_w, screen_h) = get_work_area(app);
+    let count = bubbles.lock_or_recover().len() as u32;
+    bubble_position_for_index(screen_w, screen_h, count, 200)
+}
+
 fn get_work_area(app: &AppHandle) -> (u32, u32) {
+    // Prefer monitor containing the pet window
+    if let Some(pet) = app.get_webview_window("pet") {
+        if let Ok(Some(monitor)) = pet.current_monitor() {
+            return (monitor.size().width, monitor.size().height);
+        }
+    }
+    // Fallback to primary monitor
     app.primary_monitor()
         .ok().flatten()
         .map(|m| (m.size().width, m.size().height))
@@ -122,4 +135,32 @@ pub fn bubble_height_measured(
         entry.measured_height = height;
     }
     reposition_bubbles(&app, &bubbles);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bubble_position_first() {
+        let (x, y) = bubble_position_for_index(1920, 1080, 0, 200);
+        assert_eq!(x, 1920 - BUBBLE_WIDTH - BUBBLE_MARGIN); // 1572
+        assert_eq!(y, 1080 - BUBBLE_MARGIN - 200); // 872
+    }
+
+    #[test]
+    fn test_bubble_position_stacking() {
+        let (_, y1) = bubble_position_for_index(1920, 1080, 0, 200);
+        let (_, y2) = bubble_position_for_index(1920, 1080, 1, 200);
+        assert!(y2 < y1, "second bubble should be above first");
+        assert_eq!(y1 - y2, 200 + BUBBLE_GAP);
+    }
+
+    #[test]
+    fn test_bubble_position_no_underflow() {
+        // Many bubbles shouldn't underflow
+        let (_, y) = bubble_position_for_index(1920, 1080, 100, 200);
+        // saturating_sub prevents underflow, y should be 0
+        assert_eq!(y, 0);
+    }
 }

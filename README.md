@@ -133,6 +133,32 @@ assets/svg/              35 animation frames
 | HTTP server is unauthenticated | Binds `127.0.0.1` only; token auth planned |
 | No auto-update | Download new versions from GitHub Releases |
 
+## Troubleshooting
+
+### Permission bubbles not appearing
+
+If Clyde's permission approval bubbles don't show when Claude Code requests tool permissions:
+
+1. In Claude Code, run `/hooks` and check that `PermissionRequest` has an `[http]` hook
+2. If missing or malformed, restart Clyde — it re-registers hooks on startup
+3. If still broken, run `node hooks/install.js` manually
+4. As a last resort, delete the `PermissionRequest` entry from `~/.claude/settings.json` and restart Clyde
+
+The correct format in `~/.claude/settings.json` should look like:
+
+```json
+"PermissionRequest": [
+  {
+    "matcher": "",
+    "hooks": [
+      { "type": "http", "url": "http://127.0.0.1:23333/permission", "timeout": 600 }
+    ]
+  }
+]
+```
+
+> Permission bubbles only appear for tools that trigger Claude Code's `PermissionRequest` event.
+
 ## Contributing
 
 Issues, ideas, and PRs welcome — [open an issue](https://github.com/QingJ01/Clyde/issues) or submit a PR.
@@ -165,7 +191,7 @@ npm test             # cargo test (19 unit tests)
 ## Acknowledgments
 
 - Forked from [Clawd on Desk](https://github.com/rullerzhou-afk/clawd-on-desk) by [@rullerzhou-afk](https://github.com/rullerzhou-afk) — the original Clawd desktop pet project that inspired Clyde
-- Clyde pixel art reference from [clyde-tank](https://github.com/marciogranzotto/clyde-tank) by [@marciogranzotto](https://github.com/marciogranzotto)
+- Clyde pixel art reference from [clawd-tank](https://github.com/marciogranzotto/clawd-tank) by [@marciogranzotto](https://github.com/marciogranzotto)
 - The Clyde character ("ClawdWizard") is a community creation. This project is not officially affiliated with or endorsed by [Anthropic](https://www.anthropic.com).
 
 ## License

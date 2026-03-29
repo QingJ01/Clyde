@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -23,9 +23,11 @@ pub const DEFAULT_PORT:        u16  = 23333;
 pub type PermSender   = oneshot::Sender<PermDecision>;
 pub type PendingPerms = Arc<Mutex<HashMap<String, PermSender>>>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermDecision {
-    pub behavior: String,
+#[derive(Debug, Clone)]
+pub enum PermDecision {
+    Allow,
+    Deny,
+    AllowWithPermissions(Vec<serde_json::Value>),
 }
 
 #[derive(Clone)]
@@ -150,7 +152,7 @@ async fn post_permission(
 
     let bubble_opened = permission::show_bubble(&ctx.app, &ctx.bubble_map, bubble_data);
     if !bubble_opened {
-        return (StatusCode::OK, headers, Json(perm_response("deny")));
+        return (StatusCode::OK, headers, Json(perm_response(&PermDecision::Deny)));
     }
     ctx.pending_perms.lock_or_recover().insert(entry_id.clone(), tx);
 
@@ -178,29 +180,35 @@ async fn post_permission(
         }
         // Timeout: close bubble and send default deny
         if let Some(tx) = watchdog_ctx.pending_perms.lock_or_recover().remove(&watchdog_id) {
-            let _ = tx.send(PermDecision { behavior: "deny".into() });
+            let _ = tx.send(PermDecision::Deny);
         }
         permission::close_bubble(&watchdog_ctx.app, &watchdog_ctx.bubble_map, &watchdog_id);
     });
 
-    let decision = rx.await.unwrap_or(PermDecision { behavior: "deny".into() });
+    let decision = rx.await.unwrap_or(PermDecision::Deny);
 
     // Clean up
     watchdog.abort();
     ctx.pending_perms.lock_or_recover().remove(&entry_id);
     permission::close_bubble(&ctx.app, &ctx.bubble_map, &entry_id);
 
-    (StatusCode::OK, headers, Json(perm_response(&decision.behavior)))
+    (StatusCode::OK, headers, Json(perm_response(&decision)))
 }
 
 /// Build the response format Claude Code expects for PermissionRequest HTTP hooks.
-fn perm_response(behavior: &str) -> Value {
+fn perm_response(decision: &PermDecision) -> Value {
+    let decision_obj = match decision {
+        PermDecision::Allow => json!({ "behavior": "allow" }),
+        PermDecision::Deny => json!({ "behavior": "deny" }),
+        PermDecision::AllowWithPermissions(perms) => json!({
+            "behavior": "allow",
+            "updatedPermissions": perms
+        }),
+    };
     json!({
         "hookSpecificOutput": {
             "hookEventName": "PermissionRequest",
-            "decision": {
-                "behavior": behavior
-            }
+            "decision": decision_obj
         }
     })
 }
@@ -252,14 +260,51 @@ pub fn resolve_permission(
     bubbles: tauri::State<permission::BubbleMap>,
     id: String,
     decision: String,
-    suggestion: Option<String>,
+    selected_suggestion: Option<serde_json::Value>,
 ) {
     let tx = { pending.lock_or_recover().remove(&id) };
     if let Some(tx) = tx {
-        // If a suggestion was selected, use it as the behavior; otherwise use the decision.
-        let behavior = suggestion.unwrap_or(decision);
-        let _ = tx.send(PermDecision { behavior });
+        let perm_decision = match (decision.as_str(), selected_suggestion) {
+            ("allow", Some(sug)) => PermDecision::AllowWithPermissions(vec![sug]),
+            ("allow", None) => PermDecision::Allow,
+            _ => PermDecision::Deny,
+        };
+        let _ = tx.send(perm_decision);
     }
     // Close the bubble window — Rust owns window lifecycle (CRITICAL-1)
     permission::close_bubble(&app, &bubbles, &id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_perm_response_allow() {
+        let resp = perm_response(&PermDecision::Allow);
+        let behavior = resp["hookSpecificOutput"]["decision"]["behavior"].as_str().unwrap();
+        assert_eq!(behavior, "allow");
+        assert!(resp["hookSpecificOutput"]["decision"].get("updatedPermissions").is_none());
+    }
+
+    #[test]
+    fn test_perm_response_deny() {
+        let resp = perm_response(&PermDecision::Deny);
+        let behavior = resp["hookSpecificOutput"]["decision"]["behavior"].as_str().unwrap();
+        assert_eq!(behavior, "deny");
+    }
+
+    #[test]
+    fn test_perm_response_with_permissions() {
+        let suggestion = json!({
+            "type": "addRules",
+            "rules": [{ "tool_name": "Read", "behavior": "allow" }]
+        });
+        let resp = perm_response(&PermDecision::AllowWithPermissions(vec![suggestion.clone()]));
+        let decision = &resp["hookSpecificOutput"]["decision"];
+        assert_eq!(decision["behavior"].as_str().unwrap(), "allow");
+        let perms = decision["updatedPermissions"].as_array().unwrap();
+        assert_eq!(perms.len(), 1);
+        assert_eq!(perms[0]["type"].as_str().unwrap(), "addRules");
+    }
 }

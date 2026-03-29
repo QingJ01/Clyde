@@ -616,6 +616,23 @@ pub fn run() {
                             let installer = hooks::HookInstaller { settings_path: None, server_port: Some(port) };
                             if let Err(e) = installer.register() {
                                 eprintln!("Clyde: failed to register hooks: {e}");
+                            } else {
+                                // Verify permission hook health after registration
+                                let perm_url = format!("http://127.0.0.1:{port}/permission");
+                                if let Some(settings_path) = dirs::home_dir()
+                                    .map(|h| h.join(".claude").join("settings.json"))
+                                {
+                                    if let Ok(raw) = std::fs::read_to_string(&settings_path) {
+                                        if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&raw) {
+                                            if hooks::permission_hook_is_healthy(&settings, &perm_url) {
+                                                println!("Clyde: permission hook verified — {perm_url}");
+                                            } else {
+                                                eprintln!("Clyde: WARNING — permission hook may be malformed in {}", settings_path.display());
+                                                eprintln!("Clyde: expected nested format with URL {perm_url}");
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         None => {

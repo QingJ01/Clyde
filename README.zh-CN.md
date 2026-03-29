@@ -133,6 +133,32 @@ assets/svg/              35 个动画帧
 | HTTP 服务无认证 | 仅绑定 `127.0.0.1`；计划添加 token 认证 |
 | 无自动更新 | 请从 GitHub Releases 下载新版本 |
 
+## 故障排除
+
+### 权限气泡不弹出
+
+如果 Claude Code 请求工具权限时 Clyde 没有弹出审批卡片：
+
+1. 在 Claude Code 中运行 `/hooks`，检查 `PermissionRequest` 是否有 `[http]` hook
+2. 如果缺失或格式错误，重启 Clyde — 启动时会自动重新注册 hooks
+3. 如果仍有问题，手动运行 `node hooks/install.js`
+4. 最后手段：删除 `~/.claude/settings.json` 中的 `PermissionRequest` 条目，重启 Clyde
+
+`~/.claude/settings.json` 中正确的格式应为：
+
+```json
+"PermissionRequest": [
+  {
+    "matcher": "",
+    "hooks": [
+      { "type": "http", "url": "http://127.0.0.1:23333/permission", "timeout": 600 }
+    ]
+  }
+]
+```
+
+> 权限气泡仅在 Claude Code 触发 `PermissionRequest` 事件的工具调用时出现。
+
 ## 贡献
 
 欢迎 Issue、建议和 PR — [提交 Issue](https://github.com/QingJ01/Clyde/issues) 或直接提 PR。
@@ -166,7 +192,7 @@ npm test             # cargo test（19 个单元测试）
 ## 致谢
 
 - 由 [Clawd on Desk](https://github.com/rullerzhou-afk/clawd-on-desk) ([@rullerzhou-afk](https://github.com/rullerzhou-afk)) 演化而来 — 最初的 Clawd 桌宠项目
-- Clyde 像素风格参考自 [clyde-tank](https://github.com/marciogranzotto/clyde-tank) by [@marciogranzotto](https://github.com/marciogranzotto)
+- Clyde 像素风格参考自 [clawd-tank](https://github.com/marciogranzotto/clawd-tank) by [@marciogranzotto](https://github.com/marciogranzotto)
 - Clyde 角色（"ClawdWizard"）为社区创作。本项目非 [Anthropic](https://www.anthropic.com) 官方产品。
 
 ## 许可证

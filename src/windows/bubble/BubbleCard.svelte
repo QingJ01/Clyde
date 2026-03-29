@@ -42,8 +42,28 @@
     await invoke('resolve_permission', { id, decision: 'deny' });
   }
 
-  async function applySuggestion(suggestion: string) {
-    await invoke('resolve_permission', { id, decision: 'allow', suggestion });
+  async function applySuggestion(suggestion: unknown) {
+    await invoke('resolve_permission', { id, decision: 'allow', selectedSuggestion: suggestion });
+  }
+
+  /** Derive a human-readable label from Claude's structured permission suggestion. */
+  function suggestionLabel(sug: unknown): string {
+    if (typeof sug !== 'object' || sug === null) return String(sug);
+    const obj = sug as Record<string, unknown>;
+    const type = obj.type as string | undefined;
+    if (type === 'addRules' && obj.behavior === 'allow') {
+      const tool = (obj as any).tool_name ?? toolName;
+      return `Always allow ${tool}`;
+    }
+    if (type === 'setMode' && obj.mode === 'acceptEdits') {
+      return 'Switch to Accept Edits';
+    }
+    if (type === 'addRules') {
+      const tool = (obj as any).tool_name ?? toolName;
+      const behavior = obj.behavior ?? 'allow';
+      return `${behavior} ${tool}`;
+    }
+    return 'Apply suggested permission';
   }
 
   async function goTerminal() {
@@ -77,8 +97,8 @@
   {#if suggestions.length > 0}
     <div class="suggestions">
       {#each suggestions as sug}
-        <button class="suggestion" onclick={() => applySuggestion(String(sug))} aria-label="Apply suggestion: {String(sug)}">
-          {String(sug)}
+        <button class="suggestion" onclick={() => applySuggestion(sug)} aria-label="Apply suggestion: {suggestionLabel(sug)}">
+          {suggestionLabel(sug)}
         </button>
       {/each}
     </div>

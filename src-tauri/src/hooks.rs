@@ -150,9 +150,12 @@ impl HookInstaller {
                     true
                 });
                 list.push(serde_json::json!({
-                    "type": "http",
-                    "url":  perm_url,
-                    "timeout": 600,
+                    "matcher": "",
+                    "hooks": [{
+                        "type": "http",
+                        "url":  perm_url,
+                        "timeout": 600,
+                    }]
                 }));
             }
         }
@@ -220,6 +223,30 @@ fn hook_dir() -> Result<PathBuf> {
     Ok(home.join(".claude").join("hooks"))
 }
 
+/// Check if the PermissionRequest hook in settings.json is correctly formatted.
+pub fn permission_hook_is_healthy(settings: &serde_json::Value, expected_url: &str) -> bool {
+    let perm_arr = match settings.get("hooks")
+        .and_then(|h| h.get("PermissionRequest"))
+        .and_then(|p| p.as_array()) {
+        Some(arr) => arr,
+        None => return false,
+    };
+    for entry in perm_arr {
+        // Must be nested format with matcher + hooks array
+        if entry.get("matcher").is_none() { continue; }
+        if let Some(inner) = entry.get("hooks").and_then(|h| h.as_array()) {
+            for hook in inner {
+                if hook.get("type").and_then(|t| t.as_str()) == Some("http") {
+                    if let Some(url) = hook.get("url").and_then(|u| u.as_str()) {
+                        if url == expected_url { return true; }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,11 +273,13 @@ mod tests {
         assert!(main_cmd.contains(HOOK_SCRIPT_NAME), "second entry should be main hook");
         assert!(main_cmd.contains("SessionStart"), "hook command should include event name");
 
-        // PermissionRequest should have an HTTP hook entry
+        // PermissionRequest should have a nested HTTP hook entry with matcher
         let perm_arr = parsed["hooks"]["PermissionRequest"].as_array().unwrap();
         assert_eq!(perm_arr.len(), 1, "PermissionRequest should have one entry");
         let perm_entry = &perm_arr[0];
+        assert_eq!(perm_entry["matcher"].as_str().unwrap(), "", "matcher should be empty (match all tools)");
         let inner_hooks = perm_entry["hooks"].as_array().unwrap();
+        assert_eq!(inner_hooks.len(), 1);
         assert_eq!(inner_hooks[0]["type"].as_str().unwrap(), "http");
         assert!(inner_hooks[0]["url"].as_str().unwrap().contains("/permission"));
 
@@ -280,5 +309,87 @@ mod tests {
         assert_eq!(perm_arr.len(), 1, "PermissionRequest should not duplicate");
 
         let _ = std::fs::remove_file(&tmp_file);
+    }
+
+    #[test]
+    fn test_permission_request_flat_entry_is_rewritten() {
+        let tmp_file = std::env::temp_dir().join("clyde-test-settings-flat-perm.json");
+        // Seed with OLD flat PermissionRequest format
+        let old_settings = serde_json::json!({
+            "hooks": {
+                "PermissionRequest": [
+                    { "type": "http", "url": "http://127.0.0.1:23333/permission", "timeout": 600 }
+                ]
+            }
+        });
+        std::fs::write(&tmp_file, serde_json::to_string_pretty(&old_settings).unwrap()).unwrap();
+
+        let installer = HookInstaller {
+            settings_path: Some(tmp_file.clone()),
+            server_port: Some(23334), // different port to verify rewrite
+        };
+        installer.register().expect("register should succeed");
+
+        let contents = std::fs::read_to_string(&tmp_file).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        let perm_arr = parsed["hooks"]["PermissionRequest"].as_array().unwrap();
+        assert_eq!(perm_arr.len(), 1, "should have exactly one PermissionRequest entry");
+
+        let entry = &perm_arr[0];
+        // Must be nested format with matcher + hooks array
+        assert!(entry.get("matcher").is_some(), "entry must have matcher field");
+        let inner = entry["hooks"].as_array().expect("entry must have hooks array");
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0]["url"].as_str().unwrap(), "http://127.0.0.1:23334/permission");
+
+        // Old flat url field should NOT exist at top level
+        assert!(entry.get("url").is_none(), "flat url field must not exist at top level");
+        assert!(entry.get("type").is_none(), "flat type field must not exist at top level");
+
+        let _ = std::fs::remove_file(&tmp_file);
+    }
+
+    #[test]
+    fn test_permission_hook_healthy_nested() {
+        let settings = serde_json::json!({
+            "hooks": {
+                "PermissionRequest": [{
+                    "matcher": "",
+                    "hooks": [{ "type": "http", "url": "http://127.0.0.1:23333/permission", "timeout": 600 }]
+                }]
+            }
+        });
+        assert!(permission_hook_is_healthy(&settings, "http://127.0.0.1:23333/permission"));
+    }
+
+    #[test]
+    fn test_permission_hook_unhealthy_flat() {
+        let settings = serde_json::json!({
+            "hooks": {
+                "PermissionRequest": [{
+                    "type": "http", "url": "http://127.0.0.1:23333/permission", "timeout": 600
+                }]
+            }
+        });
+        assert!(!permission_hook_is_healthy(&settings, "http://127.0.0.1:23333/permission"));
+    }
+
+    #[test]
+    fn test_permission_hook_unhealthy_wrong_port() {
+        let settings = serde_json::json!({
+            "hooks": {
+                "PermissionRequest": [{
+                    "matcher": "",
+                    "hooks": [{ "type": "http", "url": "http://127.0.0.1:99999/permission", "timeout": 600 }]
+                }]
+            }
+        });
+        assert!(!permission_hook_is_healthy(&settings, "http://127.0.0.1:23333/permission"));
+    }
+
+    #[test]
+    fn test_permission_hook_unhealthy_missing() {
+        let settings = serde_json::json!({ "hooks": {} });
+        assert!(!permission_hook_is_healthy(&settings, "http://127.0.0.1:23333/permission"));
     }
 }
