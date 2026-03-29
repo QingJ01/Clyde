@@ -51,8 +51,7 @@
     ],
     "resources": {
       "../assets/svg": "svg",
-      "../hooks": "hooks",
-      "../extensions": "extensions"
+      "../hooks": "hooks"
     },
     "windows": {
       "nsis": {
