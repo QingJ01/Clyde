@@ -69,7 +69,16 @@ Drag Clyde to the left or right screen edge (or right-click "Mini Mode"). Clyde 
 
 ### Permission Bubbles
 
-When Claude Code requests tool permissions, Clyde pops a floating card — allow, deny, or apply a suggestion rule (e.g. "Always allow Read"). Multiple requests stack upward. If you answer in the terminal first, the bubble auto-dismisses.
+When Claude Code requests tool permissions, Clyde pops a floating card near the pet — allow, deny, or apply a suggestion rule (e.g. "Always allow Read"). Multiple requests stack upward from the pet. If you answer in the terminal first, the bubble auto-dismisses.
+
+Clyde also tracks Claude's **permission mode** in real time. When the mode changes (e.g. switching to "Accept Edits" via `/permissions`), a brief notification appears near the pet:
+
+| Mode | Meaning |
+|------|---------|
+| Default | Tool calls require your approval |
+| Accept Edits | Edit operations auto-approved, others may still need approval |
+| Bypass Permissions | No approval bubbles will appear |
+| Plan | No tool execution, planning only |
 
 ### Session Intelligence
 
