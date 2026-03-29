@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -15,7 +18,7 @@ jobs:
             target: x86_64-pc-windows-msvc
           - platform: macos-latest
             target: aarch64-apple-darwin
-          - platform: macos-13
+          - platform: macos-latest
             target: x86_64-apple-darwin
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -45,6 +48,7 @@ jobs:
         run: npm ci
 
       - name: Run tests
+        shell: bash
         run: npm test
 
       - name: Build Tauri app
@@ -53,7 +57,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: '${{ github.ref_name }}'
+          releaseName: '${{ github.ref_name }} — Clyde on Desk'
           releaseBody: 'See [CHANGELOG.md](https://github.com/QingJ01/Clyde/blob/main/CHANGELOG.md) for details.'
           releaseDraft: false
           prerelease: false
