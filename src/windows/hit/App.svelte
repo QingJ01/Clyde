@@ -10,6 +10,7 @@
   function toPhys(v: number) { return Math.round(v * window.devicePixelRatio); }
 
   function onPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return; // Only handle left click — right click goes to onContextMenu
     (e.target as Element).setPointerCapture(e.pointerId);
     isDragging = false;
     startX = toPhys(e.screenX);

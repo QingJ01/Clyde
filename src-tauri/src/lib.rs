@@ -10,6 +10,7 @@ mod mini;
 mod codex_monitor;
 mod claude_monitor;
 mod permission;
+mod permission_mode;
 mod focus;
 mod util;
 
@@ -181,67 +182,80 @@ fn show_context_menu(app: AppHandle, state: tauri::State<'_, SharedState>, prefs
     use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
 
     let lang = prefs.lock_or_recover().lang.clone();
+    let p = prefs.lock_or_recover();
     let is_dnd = state.lock_or_recover().dnd;
+    let is_mini = p.mini_mode;
+    let cur_size = p.size.clone();
+    drop(p);
 
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
 
-    // Session list
-    let sessions = state.lock_or_recover().session_summaries();
-    if sessions.is_empty() {
-        let no = MenuItem::with_id(&app, "ctx-none", i18n::t("noSessions", &lang), false, None::<&str>).unwrap();
-        items.push(Box::new(no));
-    } else {
-        for (sid, sess_state, _pid, agent) in &sessions {
-            let state_label = match sess_state.as_str() {
-                "working" | "typing" => i18n::t("sessionWorking", &lang),
-                "thinking" => i18n::t("sessionThinking", &lang),
-                "juggling" => i18n::t("sessionJuggling", &lang),
-                "idle"     => i18n::t("sessionIdle", &lang),
-                "sleeping" => i18n::t("sessionSleeping", &lang),
-                _          => sess_state.clone(),
-            };
-            let label = format!("[{}] {} — {}", agent, sid.chars().take(8).collect::<String>(), state_label);
-            let item_id = format!("ctx-session-{}", sid);
-            if let Ok(item) = MenuItem::with_id(&app, &item_id, &label, true, None::<&str>) {
-                items.push(Box::new(item));
-            }
-        }
-    }
-
-    // Separator + DND
-    if let Ok(sep) = PredefinedMenuItem::separator(&app) { items.push(Box::new(sep)); }
-    let dnd_label = if is_dnd {
-        format!("✓ {}", i18n::t("dnd", &lang))
-    } else {
-        i18n::t("dnd", &lang)
-    };
-    if let Ok(dnd) = MenuItem::with_id(&app, "ctx-dnd", &dnd_label, true, None::<&str>) {
-        items.push(Box::new(dnd));
-    }
-
-    // Mini mode
-    let is_mini = prefs.lock_or_recover().mini_mode;
-    let mini_label = if is_mini {
-        format!("✓ {}", i18n::t("mini", &lang))
-    } else {
-        i18n::t("mini", &lang)
-    };
-    if let Ok(m) = MenuItem::with_id(&app, "ctx-mini", &mini_label, true, None::<&str>) {
-        items.push(Box::new(m));
-    }
-
-    // Size submenu
+    // Size submenu (with checkmark)
     if let (Ok(s), Ok(m), Ok(l)) = (
-        MenuItem::with_id(&app, "ctx-size-s", "S", true, None::<&str>),
-        MenuItem::with_id(&app, "ctx-size-m", "M", true, None::<&str>),
-        MenuItem::with_id(&app, "ctx-size-l", "L", true, None::<&str>),
+        MenuItem::with_id(&app, "ctx-size-s", if cur_size == "S" { "✓ S" } else { "S" }, true, None::<&str>),
+        MenuItem::with_id(&app, "ctx-size-m", if cur_size == "M" { "✓ M" } else { "M" }, true, None::<&str>),
+        MenuItem::with_id(&app, "ctx-size-l", if cur_size == "L" { "✓ L" } else { "L" }, true, None::<&str>),
     ) {
         if let Ok(sub) = Submenu::with_items(&app, i18n::t("size", &lang), true, &[&s, &m, &l]) {
             items.push(Box::new(sub));
         }
     }
 
-    // Language submenu (with checkmark on current selection)
+    // Mini mode
+    let mini_label = if is_mini { format!("✓ {}", i18n::t("mini", &lang)) } else { i18n::t("mini", &lang) };
+    if let Ok(m) = MenuItem::with_id(&app, "ctx-mini", &mini_label, true, None::<&str>) {
+        items.push(Box::new(m));
+    }
+
+    // DND
+    let dnd_label = if is_dnd { format!("✓ {}", i18n::t("dnd", &lang)) } else { i18n::t("dnd", &lang) };
+    if let Ok(dnd) = MenuItem::with_id(&app, "ctx-dnd", &dnd_label, true, None::<&str>) {
+        items.push(Box::new(dnd));
+    }
+
+    if let Ok(sep) = PredefinedMenuItem::separator(&app) { items.push(Box::new(sep)); }
+
+    // Sessions submenu
+    let sessions = state.lock_or_recover().session_summaries();
+    let session_label = format!("{} ({})", i18n::t("sessions", &lang), sessions.len());
+    let mut session_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
+    if sessions.is_empty() {
+        if let Ok(no) = MenuItem::with_id(&app, "ctx-none", i18n::t("noSessions", &lang), false, None::<&str>) {
+            session_items.push(Box::new(no));
+        }
+    } else {
+        for (sid, sess_state, _pid, agent) in &sessions {
+            let icon = match sess_state.as_str() {
+                "working" | "typing" => "⚡",
+                "thinking" => "💭",
+                "juggling" => "🎪",
+                "idle" => "💤",
+                "sleeping" => "😴",
+                _ => "⚡",
+            };
+            let state_label = match sess_state.as_str() {
+                "working" | "typing" => i18n::t("sessionWorking", &lang),
+                "thinking" => i18n::t("sessionThinking", &lang),
+                "juggling" => i18n::t("sessionJuggling", &lang),
+                "idle" => i18n::t("sessionIdle", &lang),
+                "sleeping" => i18n::t("sessionSleeping", &lang),
+                _ => sess_state.clone(),
+            };
+            let label = format!("{icon} {agent}  {state_label}  {}", i18n::t("sessionJustNow", &lang));
+            let item_id = format!("ctx-session-{}", sid);
+            if let Ok(item) = MenuItem::with_id(&app, &item_id, &label, true, None::<&str>) {
+                session_items.push(Box::new(item));
+            }
+        }
+    }
+    let sess_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = session_items.iter().map(|i| i.as_ref()).collect();
+    if let Ok(sub) = Submenu::with_items(&app, &session_label, true, &sess_refs) {
+        items.push(Box::new(sub));
+    }
+
+    if let Ok(sep) = PredefinedMenuItem::separator(&app) { items.push(Box::new(sep)); }
+
+    // Language submenu (with checkmark)
     let en_label = if lang == "en" { "✓ English" } else { "English" };
     let zh_label = if lang == "zh" { "✓ 中文" } else { "中文" };
     if let (Ok(en), Ok(zh)) = (
@@ -253,8 +267,11 @@ fn show_context_menu(app: AppHandle, state: tauri::State<'_, SharedState>, prefs
         }
     }
 
-    // Quit
+    // About + Quit
     if let Ok(sep) = PredefinedMenuItem::separator(&app) { items.push(Box::new(sep)); }
+    if let Ok(about) = MenuItem::with_id(&app, "ctx-about", i18n::t("about", &lang), true, None::<&str>) {
+        items.push(Box::new(about));
+    }
     if let Ok(q) = MenuItem::with_id(&app, "ctx-quit", i18n::t("quit", &lang), true, None::<&str>) {
         items.push(Box::new(q));
     }
@@ -454,8 +471,10 @@ fn set_lang(app: AppHandle, lang: String, prefs: tauri::State<SharedPrefs>) {
 }
 
 fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
-    if let Some(session_id) = id.strip_prefix("ctx-session-") {
-        // Focus terminal for this session
+    // Session focus — support both "ctx-session-X" (tray) and "session-X" (custom menu)
+    let session_id = id.strip_prefix("ctx-session-")
+        .or_else(|| id.strip_prefix("session-"));
+    if let Some(session_id) = session_id {
         let sm = state.lock_or_recover();
         if let Some(entry) = sm.sessions.get(session_id) {
             if let Some(pid) = entry.source_pid {
@@ -464,22 +483,21 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
                 focus::focus_window_by_pid(pid, &cwd);
             }
         }
-    } else {
-        match id {
-            "ctx-dnd" => {
-                do_toggle_dnd(app, state);
-            }
-            "ctx-mini" => {
-                if prefs::is_mini_mode(app) { mini::do_exit_mini(app); } else { mini::do_enter_mini(app); }
-            }
-            "ctx-size-s" => tray::apply_size_pub(app, "S"),
-            "ctx-size-m" => tray::apply_size_pub(app, "M"),
-            "ctx-size-l" => tray::apply_size_pub(app, "L"),
-            "ctx-lang-en" => tray::apply_lang_pub(app, "en"),
-            "ctx-lang-zh" => tray::apply_lang_pub(app, "zh"),
-            "ctx-quit" => app.exit(0),
-            _ => {}
-        }
+        return;
+    }
+    // Strip optional "ctx-" prefix for backward compat with tray menu
+    let action = id.strip_prefix("ctx-").unwrap_or(id);
+    match action {
+        "dnd"     => do_toggle_dnd(app, state),
+        "mini"    => { if prefs::is_mini_mode(app) { mini::do_exit_mini(app); } else { mini::do_enter_mini(app); } }
+        "size-s"  => tray::apply_size_pub(app, "S"),
+        "size-m"  => tray::apply_size_pub(app, "M"),
+        "size-l"  => tray::apply_size_pub(app, "L"),
+        "lang-en" => tray::apply_lang_pub(app, "en"),
+        "lang-zh" => tray::apply_lang_pub(app, "zh"),
+        "about"   => { let _ = open::that("https://github.com/QingJ01/Clyde"); }
+        "quit"    => app.exit(0),
+        _ => {}
     }
 }
 
@@ -556,6 +574,7 @@ pub fn run() {
     let shared_prefs: SharedPrefs = Arc::new(Mutex::new(prefs::Prefs::default()));
     let sleep_abort: SleepAbortHandle = Arc::new(Mutex::new(None));
     let bubble_map: permission::BubbleMap = Arc::new(Mutex::new(HashMap::new()));
+    let mode_tracker: permission_mode::ModeTracker = Arc::new(Mutex::new(HashMap::new()));
     let shared_tray: tray::SharedTray = Arc::new(Mutex::new(None));
 
     tauri::Builder::default()
@@ -566,6 +585,7 @@ pub fn run() {
         .manage(shared_prefs.clone())
         .manage(sleep_abort.clone())
         .manage(bubble_map.clone())
+        .manage(mode_tracker.clone())
         .manage(shared_tray.clone())
         .invoke_handler(tauri::generate_handler![
             drag_start, drag_move, drag_end, exit_mini_mode,
@@ -610,8 +630,9 @@ pub fn run() {
                 let state_clone = shared_state.clone();
                 let perms_clone = pending_perms.clone();
                 let bubbles_clone = bubble_map.clone();
+                let mode_clone = mode_tracker.clone();
                 tauri::async_runtime::spawn(async move {
-                    match http_server::start_server(handle.clone(), state_clone, perms_clone, bubbles_clone).await {
+                    match http_server::start_server(handle.clone(), state_clone, perms_clone, bubbles_clone, mode_clone).await {
                         Some(port) => {
                             let installer = hooks::HookInstaller { settings_path: None, server_port: Some(port) };
                             if let Err(e) = installer.register() {

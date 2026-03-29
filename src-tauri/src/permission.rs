@@ -7,13 +7,23 @@ use crate::util::MutexExt;
 pub type BubbleMap = Arc<Mutex<HashMap<String, BubbleEntry>>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WindowKind {
+    ApprovalRequest,
+    ModeNotice,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BubbleData {
     pub id: String,
+    pub window_kind: WindowKind,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     pub suggestions: Vec<serde_json::Value>,
     pub session_id: String,
     pub is_elicitation: bool,
+    // mode_notice fields
+    pub mode_label: Option<String>,
+    pub mode_description: Option<String>,
 }
 
 pub struct BubbleEntry {
@@ -75,21 +85,61 @@ pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     if entries.is_empty() { return; }
 
-    let (screen_w, screen_h) = get_work_area(app);
-    let mut y_bottom = screen_h.saturating_sub(BUBBLE_MARGIN);
+    let (screen_w, _) = get_work_area(app);
+    let (anchor_x, anchor_y, pet_h) = get_pet_anchor(app);
 
-    for (id, height) in &entries {
-        let label = format!("bubble-{id}");
-        if let Some(win) = app.get_webview_window(&label) {
-            let x = screen_w.saturating_sub(BUBBLE_WIDTH + BUBBLE_MARGIN);
-            let y = y_bottom.saturating_sub(*height);
-            let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-            y_bottom = y.saturating_sub(BUBBLE_GAP);
+    // Total height needed for all bubbles
+    let total_h: u32 = entries.iter().map(|(_, h)| h + BUBBLE_GAP).sum::<u32>();
+
+    // Decide direction: stack above pet if there's room, otherwise below
+    let stack_above = anchor_y as u32 >= total_h + BUBBLE_MARGIN;
+
+    if stack_above {
+        // Stack upward from pet's top edge
+        let mut y_bottom = anchor_y;
+        for (id, height) in &entries {
+            let label = format!("bubble-{id}");
+            if let Some(win) = app.get_webview_window(&label) {
+                let x = center_bubble_x(anchor_x, pet_h, screen_w);
+                let y = y_bottom.saturating_sub(*height as i32 + BUBBLE_GAP as i32);
+                let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+                y_bottom = y;
+            }
+        }
+    } else {
+        // Stack downward from pet's bottom edge
+        let mut y_top = anchor_y + pet_h as i32 + BUBBLE_GAP as i32;
+        for (id, height) in &entries {
+            let label = format!("bubble-{id}");
+            if let Some(win) = app.get_webview_window(&label) {
+                let x = center_bubble_x(anchor_x, pet_h, screen_w);
+                let _ = win.set_position(tauri::PhysicalPosition::new(x, y_top));
+                y_top += *height as i32 + BUBBLE_GAP as i32;
+            }
         }
     }
 }
 
-/// Calculate bubble position for a given index in the stack.
+/// Calculate X position: center bubble relative to pet, clamped to screen.
+fn center_bubble_x(pet_x: i32, pet_size: u32, screen_w: u32) -> i32 {
+    let center = pet_x + pet_size as i32 / 2;
+    let x = center - BUBBLE_WIDTH as i32 / 2;
+    x.max(BUBBLE_MARGIN as i32).min(screen_w as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32)
+}
+
+/// Get pet window position and size as bubble anchor point.
+fn get_pet_anchor(app: &AppHandle) -> (i32, i32, u32) {
+    if let Some(bounds) = crate::windows::get_pet_bounds(app) {
+        (bounds.x, bounds.y, bounds.height)
+    } else {
+        // Fallback: bottom-right corner
+        let (sw, sh) = get_work_area(app);
+        (sw as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32, sh as i32 - 200, 200)
+    }
+}
+
+/// Calculate bubble position for a given index in the stack (used by tests).
+#[cfg(test)]
 pub fn bubble_position_for_index(screen_w: u32, screen_h: u32, index: u32, bubble_height: u32) -> (u32, u32) {
     let x = screen_w.saturating_sub(BUBBLE_WIDTH + BUBBLE_MARGIN);
     let y = screen_h.saturating_sub(BUBBLE_MARGIN + bubble_height + index * (bubble_height + BUBBLE_GAP));
@@ -97,9 +147,12 @@ pub fn bubble_position_for_index(screen_w: u32, screen_h: u32, index: u32, bubbl
 }
 
 fn initial_bubble_position(app: &AppHandle, bubbles: &BubbleMap) -> (u32, u32) {
-    let (screen_w, screen_h) = get_work_area(app);
+    let (screen_w, _screen_h) = get_work_area(app);
+    let (pet_x, pet_y, pet_h) = get_pet_anchor(app);
     let count = bubbles.lock_or_recover().len() as u32;
-    bubble_position_for_index(screen_w, screen_h, count, 200)
+    let x = center_bubble_x(pet_x, pet_h, screen_w);
+    let y = pet_y - (count as i32 + 1) * (200 + BUBBLE_GAP as i32);
+    (x.max(0) as u32, y.max(0) as u32)
 }
 
 fn get_work_area(app: &AppHandle) -> (u32, u32) {
