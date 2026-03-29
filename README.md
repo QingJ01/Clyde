@@ -23,7 +23,7 @@ Works with **Claude Code**, **Codex CLI**, and **Copilot CLI** — all three can
 
 ```bash
 git clone https://github.com/QingJ01/Clyde.git
-cd clyde-on-desk
+cd Clyde
 npm install
 npm start        # Tauri dev mode with hot-reload
 ```
