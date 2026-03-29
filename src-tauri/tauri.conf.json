@@ -1,0 +1,65 @@
+{
+  "productName": "Clyde on Desk",
+  "version": "0.1.0",
+  "identifier": "com.clyde.on-desk",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "pet",
+        "title": "Clyde on Desk",
+        "width": 200,
+        "height": 200,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "url": "src/windows/pet/index.html"
+      },
+      {
+        "label": "hit",
+        "title": "",
+        "width": 60,
+        "height": 60,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "url": "src/windows/hit/index.html"
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../assets/svg": "svg",
+      "../hooks": "hooks",
+      "../extensions": "extensions"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English", "SimpChinese"],
+        "displayLanguageSelector": true
+      }
+    }
+  }
+}

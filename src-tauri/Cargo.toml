@@ -1,0 +1,46 @@
+[package]
+name = "clyde"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[lib]
+name = "clyde_lib"
+crate-type = ["cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+axum = { version = "0.7", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"
+dirs = "5"
+
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_Threading",
+  "Win32_System_Diagnostics_ToolHelp",
+] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

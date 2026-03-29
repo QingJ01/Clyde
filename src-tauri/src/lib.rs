@@ -1,0 +1,623 @@
+mod windows;
+mod tick;
+mod state_machine;
+mod http_server;
+mod hooks;
+mod i18n;
+mod prefs;
+mod tray;
+mod mini;
+mod codex_monitor;
+mod claude_monitor;
+mod permission;
+mod focus;
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
+use tauri::window::Color;
+use state_machine::{SharedState, StateMachine};
+use http_server::PendingPerms;
+use prefs::SharedPrefs;
+/// Shared task handle for sleep sequence, wake animation, and mini-enter delayed tasks.
+/// Any new sleep/wake/mini transition should cancel the previous one.
+pub type SleepAbortHandle = Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>;
+
+struct DragState {
+    active:        bool,
+    dragging:      bool,   // true once drag threshold is exceeded
+    start_win_x:   i32,
+    start_win_y:   i32,
+    start_mouse_x: f64,
+    start_mouse_y: f64,
+}
+type SharedDrag = Arc<Mutex<DragState>>;
+
+/// Minimum mouse distance (physical pixels) before a drag actually starts.
+const DRAG_THRESHOLD: f64 = 3.0;
+
+#[tauri::command]
+fn drag_start(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
+    let mut d = drag.lock().expect("drag mutex poisoned");
+    // Always set active so drag_end runs (for click detection, sync_hit, etc.).
+    // If pet bounds are unavailable (rare, e.g. during animation), use last known or 0,0.
+    d.active        = true;
+    d.dragging      = false;
+    d.start_mouse_x = x;
+    d.start_mouse_y = y;
+    if let Some(bounds) = windows::get_pet_bounds(&app) {
+        d.start_win_x = bounds.x;
+        d.start_win_y = bounds.y;
+    }
+    // If bounds unavailable, keep previous start_win_x/y — drag_move will still work
+    // relative to wherever the pet was last known to be.
+}
+
+#[tauri::command]
+fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
+    let (active, dragging, base_x, base_y, smx, smy) = {
+        let d = drag.lock().expect("drag mutex poisoned");
+        (d.active, d.dragging, d.start_win_x, d.start_win_y, d.start_mouse_x, d.start_mouse_y)
+    };
+    if !active { return; }
+
+    let dx = x - smx;
+    let dy = y - smy;
+
+    // Don't start moving until the mouse has moved past the drag threshold
+    if !dragging {
+        if (dx * dx + dy * dy).sqrt() < DRAG_THRESHOLD { return; }
+        drag.lock().expect("drag mutex poisoned").dragging = true;
+    }
+
+    let mut new_x = base_x + dx as i32;
+    let mut new_y = base_y + dy as i32;
+
+    // Query pet bounds once for both clamp and hit-window sync
+    let bounds = windows::get_pet_bounds(&app);
+    let pet_w = bounds.as_ref().map(|b| b.width).unwrap_or(200);
+    let pet_h = bounds.as_ref().map(|b| b.height).unwrap_or(200);
+
+    // Clamp to screen bounds: keep at least 30px of the pet visible
+    if let Some(monitor) = app.primary_monitor().ok().flatten() {
+        let screen_w = monitor.size().width as i32;
+        let screen_h = monitor.size().height as i32;
+        const MIN_VISIBLE: i32 = 30;
+        new_x = new_x.max(MIN_VISIBLE - pet_w as i32).min(screen_w - MIN_VISIBLE);
+        new_y = new_y.max(0).min(screen_h - MIN_VISIBLE);
+    }
+
+    if let Some(pet) = app.get_webview_window("pet") {
+        let _ = pet.set_position(PhysicalPosition::new(new_x, new_y));
+    }
+    // Construct updated bounds from the new position + known size (avoid second IPC query)
+    let updated = windows::WindowBounds { x: new_x, y: new_y, width: pet_w, height: pet_h };
+    windows::sync_hit_window(&app, &updated, &windows::HitBox::DEFAULT);
+}
+
+#[tauri::command]
+fn drag_end(app: AppHandle, drag: tauri::State<SharedDrag>, abort_handle: tauri::State<'_, SleepAbortHandle>) {
+    let was_dragging = {
+        let mut d = drag.lock().expect("drag mutex poisoned");
+        let dragging = d.dragging;
+        d.active = false;
+        d.dragging = false;
+        dragging
+    };
+
+    let is_mini = app.try_state::<SharedPrefs>()
+        .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
+        .unwrap_or(false);
+
+    if is_mini {
+        if !was_dragging {
+            // Click in mini mode — just sync, don't change mode
+            sync_hit(&app);
+        } else if mini::should_snap_to_edge(&app).is_some() {
+            // Dragged but still near edge — stay in mini mode
+            sync_hit(&app);
+        } else {
+            // Dragged away from edge — exit mini mode
+            cancel_pending_task(&abort_handle);
+            mini::do_exit_mini(&app);
+        }
+    } else if was_dragging && mini::should_snap_to_edge(&app).is_some() {
+        // Actually dragged to edge → enter mini mode (clicks won't trigger this).
+        // animate_to_x inside do_enter_mini auto-syncs hit window on completion.
+        if mini::do_enter_mini(&app) {
+            cancel_pending_task(&abort_handle);
+            let app2 = app.clone();
+            let handle = tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                emit_state(&app2, "mini-idle", "clyde-mini-idle.svg");
+            });
+            *abort_handle.lock().expect("task handle mutex poisoned") = Some(handle);
+        }
+    } else {
+        // Normal click or drag end — sync hit window
+        sync_hit(&app);
+    }
+}
+
+#[tauri::command]
+fn exit_mini_mode(app: AppHandle, abort_handle: tauri::State<'_, SleepAbortHandle>) {
+    cancel_pending_task(&abort_handle);
+    mini::do_exit_mini(&app);
+}
+
+#[tauri::command]
+fn hit_double_click(app: AppHandle, abort_handle: tauri::State<'_, SleepAbortHandle>) {
+    let is_mini = app.try_state::<SharedPrefs>()
+        .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
+        .unwrap_or(false);
+    if is_mini {
+        cancel_pending_task(&abort_handle);
+        mini::do_exit_mini(&app);
+        return;
+    }
+    if let Some(pet) = app.get_webview_window("pet") {
+        let _ = pet.emit("play-click-reaction", serde_json::json!({
+            "svg": "clyde-react-double.svg", "duration_ms": 800
+        }));
+    }
+}
+
+#[tauri::command]
+fn hit_flail(app: AppHandle) {
+    if let Some(pet) = app.get_webview_window("pet") {
+        let _ = pet.emit("play-click-reaction", serde_json::json!({
+            "svg": "clyde-react-drag.svg", "duration_ms": 1200
+        }));
+    }
+}
+
+#[tauri::command]
+fn show_context_menu(app: AppHandle, state: tauri::State<'_, SharedState>, prefs: tauri::State<SharedPrefs>) {
+    use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
+
+    let lang = prefs.lock().expect("prefs mutex poisoned").lang.clone();
+    let is_dnd = state.lock().expect("state mutex poisoned").dnd;
+
+    let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
+
+    // Session list
+    let sessions = state.lock().expect("state mutex poisoned").session_summaries();
+    if sessions.is_empty() {
+        let no = MenuItem::with_id(&app, "ctx-none", i18n::t("noSessions", &lang), false, None::<&str>).unwrap();
+        items.push(Box::new(no));
+    } else {
+        for (sid, sess_state, _pid, agent) in &sessions {
+            let state_label = match sess_state.as_str() {
+                "working" | "typing" => i18n::t("sessionWorking", &lang),
+                "thinking" => i18n::t("sessionThinking", &lang),
+                "juggling" => i18n::t("sessionJuggling", &lang),
+                "idle"     => i18n::t("sessionIdle", &lang),
+                "sleeping" => i18n::t("sessionSleeping", &lang),
+                _          => sess_state.clone(),
+            };
+            let label = format!("[{}] {} — {}", agent, sid.chars().take(8).collect::<String>(), state_label);
+            let item_id = format!("ctx-session-{}", sid);
+            if let Ok(item) = MenuItem::with_id(&app, &item_id, &label, true, None::<&str>) {
+                items.push(Box::new(item));
+            }
+        }
+    }
+
+    // Separator + DND
+    if let Ok(sep) = PredefinedMenuItem::separator(&app) { items.push(Box::new(sep)); }
+    let dnd_label = if is_dnd {
+        format!("✓ {}", i18n::t("dnd", &lang))
+    } else {
+        i18n::t("dnd", &lang)
+    };
+    if let Ok(dnd) = MenuItem::with_id(&app, "ctx-dnd", &dnd_label, true, None::<&str>) {
+        items.push(Box::new(dnd));
+    }
+
+    // Mini mode
+    let is_mini = prefs.lock().expect("prefs mutex poisoned").mini_mode;
+    let mini_label = if is_mini {
+        format!("✓ {}", i18n::t("mini", &lang))
+    } else {
+        i18n::t("mini", &lang)
+    };
+    if let Ok(m) = MenuItem::with_id(&app, "ctx-mini", &mini_label, true, None::<&str>) {
+        items.push(Box::new(m));
+    }
+
+    // Size submenu
+    if let (Ok(s), Ok(m), Ok(l)) = (
+        MenuItem::with_id(&app, "ctx-size-s", "S", true, None::<&str>),
+        MenuItem::with_id(&app, "ctx-size-m", "M", true, None::<&str>),
+        MenuItem::with_id(&app, "ctx-size-l", "L", true, None::<&str>),
+    ) {
+        if let Ok(sub) = Submenu::with_items(&app, i18n::t("size", &lang), true, &[&s, &m, &l]) {
+            items.push(Box::new(sub));
+        }
+    }
+
+    // Language submenu
+    if let (Ok(en), Ok(zh)) = (
+        MenuItem::with_id(&app, "ctx-lang-en", "English", true, None::<&str>),
+        MenuItem::with_id(&app, "ctx-lang-zh", "中文", true, None::<&str>),
+    ) {
+        if let Ok(sub) = Submenu::with_items(&app, i18n::t("language", &lang), true, &[&en, &zh]) {
+            items.push(Box::new(sub));
+        }
+    }
+
+    // Quit
+    if let Ok(sep) = PredefinedMenuItem::separator(&app) { items.push(Box::new(sep)); }
+    if let Ok(q) = MenuItem::with_id(&app, "ctx-quit", i18n::t("quit", &lang), true, None::<&str>) {
+        items.push(Box::new(q));
+    }
+
+    let item_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = items.iter().map(|i| i.as_ref()).collect();
+    if let Ok(menu) = Menu::with_items(&app, &item_refs) {
+        if let Some(hit) = app.get_webview_window("hit") {
+            let _ = hit.popup_menu(&menu);
+        }
+    }
+}
+
+#[tauri::command]
+fn mini_peek_in(app: AppHandle) {
+    emit_state(&app, "mini-peek", "clyde-mini-peek.svg");
+    mini::peek_in(&app);
+}
+
+#[tauri::command]
+fn mini_peek_out(app: AppHandle) {
+    emit_state(&app, "mini-idle", "clyde-mini-idle.svg");
+    mini::peek_out(&app);
+}
+
+/// Shared DND toggle — used from tauri command, context menu, and tray handler.
+pub(crate) fn do_toggle_dnd(app: &AppHandle, state: &SharedState) {
+    let new_dnd = {
+        let mut sm = state.lock().expect("state mutex poisoned");
+        sm.dnd = !sm.dnd;
+        sm.dnd
+    };
+    let _ = app.emit("dnd-change", serde_json::json!({ "enabled": new_dnd }));
+}
+
+#[tauri::command]
+fn toggle_dnd(app: AppHandle, state: tauri::State<'_, SharedState>) {
+    do_toggle_dnd(&app, &state);
+}
+
+pub(crate) fn emit_state(app: &AppHandle, state_str: &str, svg: &str) {
+    let flip = is_left_mini(app);
+    let _ = app.emit("state-change", serde_json::json!({ "state": state_str, "svg": svg, "flip": flip }));
+}
+
+/// Check if currently in left-side mini mode.
+fn is_left_mini(app: &AppHandle) -> bool {
+    let is_mini = app.try_state::<SharedPrefs>()
+        .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
+        .unwrap_or(false);
+    if !is_mini { return false; }
+    mini::should_snap_to_edge(app)
+        .map(|s| s.side == mini::SnapSide::Left)
+        .unwrap_or(false)
+}
+
+pub(crate) fn sync_hit(app: &AppHandle) {
+    if let Some(bounds) = windows::get_pet_bounds(app) {
+        windows::sync_hit_window(app, &bounds, &windows::HitBox::DEFAULT);
+    }
+}
+
+/// Shared pipeline: lock state → update session → resolve → emit.
+/// Used by codex_monitor and cleanup loop. The HTTP server has its own
+/// more complex version (oneshot handling, metadata, DND).
+pub(crate) fn update_session_and_emit(
+    app: &AppHandle,
+    state: &SharedState,
+    session_id: &str,
+    state_str: &str,
+    event: &str,
+) {
+    let (resolved, svg) = {
+        let mut sm = state.lock().expect("state mutex poisoned");
+        if event == "SessionEnd" {
+            sm.handle_session_end(session_id);
+        } else {
+            sm.update_session_state(session_id, state_str, event);
+        }
+        let resolved = sm.resolve_display_state();
+        let svg = sm.svg_for_state(&resolved);
+        sm.current_state = resolved.clone();
+        sm.current_svg = svg.clone();
+        (resolved, svg)
+    };
+    emit_state(app, &resolved, &svg);
+}
+
+/// Atomically update state machine and emit to frontend.
+fn transition(app: &AppHandle, state: &SharedState, state_str: &str, svg: &str) {
+    {
+        let mut sm = state.lock().expect("state mutex poisoned");
+        sm.current_state = state_str.into();
+        sm.current_svg = svg.into();
+    }
+    emit_state(app, state_str, svg);
+}
+
+fn cancel_pending_task(handle: &SleepAbortHandle) {
+    if let Some(old) = handle.lock().expect("task handle mutex poisoned").take() {
+        old.abort();
+    }
+}
+
+#[tauri::command]
+fn trigger_sleep_sequence(app: AppHandle, state: tauri::State<'_, SharedState>, abort_handle: tauri::State<'_, SleepAbortHandle>) {
+    cancel_pending_task(&abort_handle);
+
+    transition(&app, &state, "yawning", "clyde-idle-yawn.svg");
+
+    let app2 = app.clone();
+    let state2 = state.inner().clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        // yawn → doze (3s)
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        if state2.lock().expect("state mutex poisoned").current_state != "yawning" { return; }
+        transition(&app2, &state2, "dozing", "clyde-idle-doze.svg");
+
+        // doze → collapse (4s)
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        if state2.lock().expect("state mutex poisoned").current_state != "dozing" { return; }
+        transition(&app2, &state2, "collapsing", "clyde-collapse-sleep.svg");
+
+        // collapse → sleeping (3s)
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        if state2.lock().expect("state mutex poisoned").current_state != "collapsing" { return; }
+        transition(&app2, &state2, "sleeping", "clyde-sleeping.svg");
+    });
+    *abort_handle.lock().expect("task handle mutex poisoned") = Some(handle);
+}
+
+#[tauri::command]
+fn trigger_wake(app: AppHandle, state: tauri::State<'_, SharedState>, abort_handle: tauri::State<'_, SleepAbortHandle>) {
+    cancel_pending_task(&abort_handle);
+
+    let current = state.lock().expect("state mutex poisoned").current_state.clone();
+    if !matches!(current.as_str(), "yawning" | "dozing" | "collapsing" | "sleeping") {
+        return;
+    }
+
+    transition(&app, &state, "waking", "clyde-wake.svg");
+
+    let app2 = app.clone();
+    let state2 = state.inner().clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        if state2.lock().expect("state mutex poisoned").current_state != "waking" { return; }
+        transition(&app2, &state2, "idle", "clyde-idle-follow.svg");
+    });
+    *abort_handle.lock().expect("task handle mutex poisoned") = Some(handle);
+}
+
+#[tauri::command]
+fn set_window_size(app: AppHandle, size: String, prefs: tauri::State<SharedPrefs>) {
+    if let Some(pet) = app.get_webview_window("pet") {
+        let (w, h) = prefs::size_to_pixels(&size);
+        let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
+        sync_hit(&app);
+        let mut p = prefs.lock().expect("prefs mutex poisoned");
+        p.size = size;
+        prefs::save(&app, &p);
+    }
+}
+
+#[tauri::command]
+fn set_lang(app: AppHandle, lang: String, prefs: tauri::State<SharedPrefs>) {
+    {
+        let mut p = prefs.lock().expect("prefs mutex poisoned");
+        p.lang = lang.clone();
+        prefs::save(&app, &p);
+    }
+    let _ = app.emit("lang-changed", &lang);
+    tray::rebuild_menu(&app, &lang);
+}
+
+fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
+    if let Some(session_id) = id.strip_prefix("ctx-session-") {
+        // Focus terminal for this session
+        let sm = state.lock().expect("state mutex poisoned");
+        if let Some(entry) = sm.sessions.get(session_id) {
+            if let Some(pid) = entry.source_pid {
+                let cwd = entry.cwd.clone();
+                drop(sm);
+                focus::focus_window_by_pid(pid, &cwd);
+            }
+        }
+    } else {
+        match id {
+            "ctx-dnd" => {
+                do_toggle_dnd(app, state);
+            }
+            "ctx-mini" => {
+                let is_mini = app.try_state::<SharedPrefs>()
+                    .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
+                    .unwrap_or(false);
+                if is_mini { mini::do_exit_mini(app); } else { mini::do_enter_mini(app); }
+            }
+            "ctx-size-s" => tray::apply_size_pub(app, "S"),
+            "ctx-size-m" => tray::apply_size_pub(app, "M"),
+            "ctx-size-l" => tray::apply_size_pub(app, "L"),
+            "ctx-lang-en" => tray::apply_lang_pub(app, "en"),
+            "ctx-lang-zh" => tray::apply_lang_pub(app, "zh"),
+            "ctx-quit" => app.exit(0),
+            _ => {}
+        }
+    }
+}
+
+pub fn run() {
+    let drag_state: SharedDrag = Arc::new(Mutex::new(DragState {
+        active: false, dragging: false, start_win_x: 0, start_win_y: 0,
+        start_mouse_x: 0.0, start_mouse_y: 0.0,
+    }));
+    let shared_state: SharedState = Arc::new(Mutex::new(StateMachine::new()));
+    let pending_perms: PendingPerms = Arc::new(Mutex::new(HashMap::new()));
+    let shared_prefs: SharedPrefs = Arc::new(Mutex::new(prefs::Prefs::default()));
+    let sleep_abort: SleepAbortHandle = Arc::new(Mutex::new(None));
+    let bubble_map: permission::BubbleMap = Arc::new(Mutex::new(HashMap::new()));
+    let shared_tray: tray::SharedTray = Arc::new(Mutex::new(None));
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {}))
+        .manage(drag_state)
+        .manage(shared_state.clone())
+        .manage(pending_perms.clone())
+        .manage(shared_prefs.clone())
+        .manage(sleep_abort.clone())
+        .manage(bubble_map.clone())
+        .manage(shared_tray.clone())
+        .invoke_handler(tauri::generate_handler![
+            drag_start, drag_move, drag_end, exit_mini_mode,
+            hit_double_click, hit_flail, show_context_menu,
+            toggle_dnd, mini_peek_in, mini_peek_out,
+            http_server::resolve_permission,
+            trigger_sleep_sequence,
+            trigger_wake,
+            set_window_size,
+            set_lang,
+            permission::get_bubble_data,
+            permission::bubble_height_measured,
+            focus::focus_terminal_for_session,
+        ])
+        .setup(move |app| {
+            // Load prefs from disk and store into managed state
+            let prefs = prefs::load(app.handle());
+            *shared_prefs.lock().expect("prefs mutex poisoned") = prefs.clone();
+
+            // Pet window: set transparent background + position BEFORE showing
+            if let Some(pet) = app.get_webview_window("pet") {
+                if let Err(e) = pet.set_background_color(Some(Color(0, 0, 0, 0))) {
+                    eprintln!("Clyde: set_background_color failed: {e}");
+                }
+                let _ = pet.set_ignore_cursor_events(true);
+                let _ = pet.set_position(tauri::PhysicalPosition::new(prefs.x, prefs.y));
+                let (w, h) = prefs::size_to_pixels(&prefs.size);
+                let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
+                if let Err(e) = pet.show() {
+                    eprintln!("Clyde: pet.show() failed: {e}");
+                }
+                println!("Clyde: pet window shown ({}x{}) at ({},{})", w, h, prefs.x, prefs.y);
+                #[cfg(debug_assertions)]
+                pet.open_devtools();
+            } else {
+                eprintln!("Clyde: pet window not found!");
+            }
+
+            // Hit window: transparent background, position and show
+            if let Some(hit) = app.get_webview_window("hit") {
+                let _ = hit.set_background_color(Some(Color(0, 0, 0, 0)));
+            }
+            if let Some(bounds) = windows::get_pet_bounds(app.handle()) {
+                windows::sync_hit_window(app.handle(), &bounds, &windows::HitBox::DEFAULT);
+                windows::show_hit_window(app.handle());
+                println!("Clyde: hit window synced to pet bounds");
+            } else {
+                eprintln!("Clyde: could not get pet bounds for hit window sync");
+            }
+
+            // Build system tray
+            if prefs.show_tray {
+                match tray::build_tray(app.handle(), &prefs.lang) {
+                    Ok(tray_icon) => {
+                        *shared_tray.lock().expect("tray mutex poisoned") = Some(tray_icon);
+                        println!("Clyde: tray icon created");
+                    }
+                    Err(e) => eprintln!("Clyde: tray error: {e}"),
+                }
+            }
+
+            // Save position on close (read from managed state, no TOCTOU)
+            if let Some(pet_win) = app.get_webview_window("pet") {
+                let handle_for_close = app.handle().clone();
+                let shared_prefs_for_close = shared_prefs.clone();
+                pet_win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { .. } = event {
+                        if let Some(bounds) = windows::get_pet_bounds(&handle_for_close) {
+                            let mut p = shared_prefs_for_close.lock().expect("prefs mutex poisoned");
+                            p.x = bounds.x;
+                            p.y = bounds.y;
+                            prefs::save(&handle_for_close, &p);
+                        }
+                    }
+                });
+            }
+
+            let handle       = app.handle().clone();
+            let state_clone  = shared_state.clone();
+            let perms_clone  = pending_perms.clone();
+            let bubbles_clone = bubble_map.clone();
+
+            // Start HTTP server + register hooks
+            tauri::async_runtime::spawn(async move {
+                match http_server::start_server(handle.clone(), state_clone, perms_clone, bubbles_clone).await {
+                    Some(port) => {
+                        let installer = hooks::HookInstaller { settings_path: None, server_port: Some(port) };
+                        if let Err(e) = installer.register() {
+                            eprintln!("Clyde: failed to register hooks: {e}");
+                        }
+                    }
+                    None => {
+                        eprintln!("Clyde: HTTP server failed to start — skipping hook installation");
+                    }
+                }
+            });
+
+            // Context menu event handling on hit window
+            {
+                let app_for_menu = app.handle().clone();
+                let state_for_menu = shared_state.clone();
+                if let Some(hit) = app.get_webview_window("hit") {
+                    hit.on_menu_event(move |_win, event| {
+                        let id = event.id().as_ref();
+                        handle_context_menu_event(&app_for_menu, &state_for_menu, id);
+                    });
+                }
+            }
+
+            // Start cursor polling (reads SharedState directly, no intermediate sync task)
+            tick::start_tick(app.handle().clone(), shared_state.clone());
+
+            // Start Codex monitor
+            codex_monitor::start_codex_monitor(app.handle().clone(), shared_state.clone());
+
+            // Start Claude Code session monitor (covers VS Code, Desktop, and CLI)
+            claude_monitor::start_claude_monitor(app.handle().clone(), shared_state.clone());
+
+            // Start session cleanup loop (stale sessions + process liveness)
+            {
+                let state_for_cleanup = shared_state.clone();
+                let app_for_cleanup = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+                    loop {
+                        interval.tick().await;
+                        let changed = state_for_cleanup.lock().expect("state mutex poisoned").clean_stale();
+                        if changed {
+                            let sm = state_for_cleanup.lock().expect("state mutex poisoned");
+                            let resolved = sm.resolve_display_state();
+                            let svg = sm.svg_for_state(&resolved);
+                            emit_state(&app_for_cleanup, &resolved, &svg);
+                        }
+                    }
+                });
+            }
+
+            // Startup recovery: if sessions exist (e.g., from a previous Clyde instance's
+            // runtime.json), the HTTP server is ready and hooks will fire. Prevent immediate
+            // sleep by treating startup as mouse activity.
+
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

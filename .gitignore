@@ -1,0 +1,35 @@
+node_modules/
+dist/
+src-tauri/target/
+.env
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+
+# Claude Code local config
+.claude/
+CLAUDE.md
+
+# Development plans & review notes
+PLAN.md
+PLAN-*.md
+codex-*.md
+CHANGELOG-draft.md
+docs/
+!docs/copilot-setup.md
+!docs/release-v0.5.5.md
+
+# Temp files from testing
+.tmp_*
+*.tmp
+
+# Third-party reference repo
+clyde-tank/
+
+# Debug logs
+logs/
+
+# GIF recording tools (not part of main project)
+scripts/
+!scripts/remote-deploy.sh
