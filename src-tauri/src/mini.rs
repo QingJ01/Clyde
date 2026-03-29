@@ -1,6 +1,7 @@
 use std::time::Duration;
 use tauri::{AppHandle, Manager, PhysicalPosition};
 use crate::prefs::{self, SharedPrefs};
+use crate::state_machine::SharedState;
 use crate::windows::get_pet_bounds;
 use crate::{emit_state, sync_hit};
 
@@ -60,7 +61,16 @@ pub fn do_exit_mini(app: &AppHandle) -> bool {
     if let Some(pet) = app.get_webview_window("pet") {
         let _ = pet.set_position(PhysicalPosition::new(pre_x, pre_y));
     }
-    emit_state(app, "idle", "clyde-idle-follow.svg");
+    // Restore the real state from the state machine instead of hardcoding idle
+    let (resolved, svg) = if let Some(state) = app.try_state::<SharedState>() {
+        let sm = state.lock().expect("state mutex poisoned");
+        let r = sm.resolve_display_state();
+        let s = sm.svg_for_state(&r);
+        (r, s)
+    } else {
+        ("idle".into(), "clyde-idle-follow.svg".into())
+    };
+    emit_state(app, &resolved, &svg);
     sync_hit(app);
     true
 }

@@ -289,7 +289,35 @@ fn toggle_dnd(app: AppHandle, state: tauri::State<'_, SharedState>) {
 
 pub(crate) fn emit_state(app: &AppHandle, state_str: &str, svg: &str) {
     let flip = is_left_mini(app);
-    let _ = app.emit("state-change", serde_json::json!({ "state": state_str, "svg": svg, "flip": flip }));
+    let is_mini = app.try_state::<SharedPrefs>()
+        .map(|p| p.lock().expect("prefs mutex poisoned").mini_mode)
+        .unwrap_or(false);
+
+    // In mini mode, map normal states to mini SVGs so the pet shows real-time status
+    let (out_state, out_svg) = if is_mini && !state_str.starts_with("mini-") {
+        let mini = mini_svg_for_state(state_str);
+        (mini.0, mini.1)
+    } else {
+        (state_str, svg)
+    };
+
+    let _ = app.emit("state-change", serde_json::json!({ "state": out_state, "svg": out_svg, "flip": flip }));
+}
+
+/// Map a normal state to its mini-mode equivalent.
+fn mini_svg_for_state(state: &str) -> (&'static str, &'static str) {
+    match state {
+        "working" | "thinking" | "juggling" | "sweeping" | "carrying"
+            => ("mini-alert", "clyde-mini-alert.svg"),
+        "attention" | "notification"
+            => ("mini-happy", "clyde-mini-happy.svg"),
+        "error"
+            => ("mini-alert", "clyde-mini-alert.svg"),
+        "sleeping" | "yawning" | "dozing" | "collapsing"
+            => ("mini-sleep", "clyde-mini-sleep.svg"),
+        _ // idle, waking, etc.
+            => ("mini-idle", "clyde-mini-idle.svg"),
+    }
 }
 
 /// Check if currently in left-side mini mode.

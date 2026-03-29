@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use crate::state_machine::{SharedState, ONESHOT_STATES};
 use crate::permission;
 
@@ -100,7 +100,7 @@ async fn post_state(
         (sm.current_state.clone(), svg)
     };
 
-    let _ = ctx.app.emit("state-change", json!({ "state": new_state, "svg": new_svg }));
+    crate::emit_state(&ctx.app, &new_state, &new_svg);
 
     // Auto-focus terminal on notification/attention states
     if matches!(payload.state.as_str(), "notification" | "attention") {
