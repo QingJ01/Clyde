@@ -26,6 +26,7 @@ export default defineConfig({
         pet:    path.resolve(__dirname, 'src/windows/pet/index.html'),
         hit:    path.resolve(__dirname, 'src/windows/hit/index.html'),
         bubble: path.resolve(__dirname, 'src/windows/bubble/index.html'),
+        menu:   path.resolve(__dirname, 'src/windows/menu/index.html'),
       },
     },
   },

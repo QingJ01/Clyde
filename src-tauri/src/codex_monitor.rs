@@ -136,7 +136,7 @@ fn codex_update_and_emit(app: &AppHandle, state: &SharedState, session_id: &str,
 /// - `{type: "response_item", payload: {type: "function_call"}}` → working
 /// - `{type: "response_item", payload: {type: "function_call_output"}}` → working
 /// - `{type: "response_item", payload: {type: "message", role: "assistant"}}` → idle (if end_turn)
-/// - `{type: "event_msg", payload: {type: "task_completed"}}` → session end
+/// - `{type: "event_msg", payload: {type: "task_complete"}}` → session end
 fn map_codex_event(event: &serde_json::Value) -> Option<&'static str> {
     let top_type = event["type"].as_str()?;
 

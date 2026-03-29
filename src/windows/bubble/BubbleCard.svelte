@@ -3,19 +3,27 @@
 
   let {
     id,
-    toolName,
+    windowKind = 'ApprovalRequest',
+    toolName = '',
     toolInput = {},
     suggestions = [],
     sessionId,
     isElicitation = false,
+    modeLabel = '',
+    modeDescription = '',
   }: {
     id: string;
-    toolName: string;
+    windowKind?: string;
+    toolName?: string;
     toolInput?: Record<string, unknown>;
     suggestions?: unknown[];
     sessionId: string;
     isElicitation?: boolean;
+    modeLabel?: string;
+    modeDescription?: string;
   } = $props();
+
+  const isModeNotice = windowKind === 'ModeNotice';
 
   // Map tool names to short labels for the badge
   const TOOL_BADGES: Record<string, string> = {
@@ -70,8 +78,29 @@
     await invoke('focus_terminal_for_session', { sessionId });
     await deny();
   }
+
+  async function dismiss() {
+    // Mode notice: just close the bubble (no permission decision needed)
+    try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().close(); } catch {}
+  }
 </script>
 
+{#if isModeNotice}
+<div class="bubble">
+  <div class="header">
+    <span class="title">Mode Changed</span>
+    <span class="badge badge-mode">{modeLabel}</span>
+  </div>
+
+  <div class="code-block">
+    <pre>{modeDescription}</pre>
+  </div>
+
+  <div class="actions">
+    <button class="btn btn-allow" onclick={dismiss} aria-label="Dismiss">OK</button>
+  </div>
+</div>
+{:else}
 <div class="bubble">
   <div class="header">
     <span class="title">Permission Request</span>
@@ -104,6 +133,7 @@
     </div>
   {/if}
 </div>
+{/if}
 
 <style>
   .bubble {
@@ -143,6 +173,12 @@
     padding: 3px 8px;
     border-radius: 6px;
     border: 1px solid rgba(199, 134, 80, 0.25);
+  }
+
+  .badge-mode {
+    background: rgba(99, 134, 199, 0.2);
+    color: #6a9be8;
+    border-color: rgba(99, 134, 199, 0.25);
   }
 
   .code-block {
@@ -246,4 +282,6 @@
     outline: 2px solid #c78650;
     outline-offset: 1px;
   }
+
+
 </style>

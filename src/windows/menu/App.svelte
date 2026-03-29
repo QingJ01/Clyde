@@ -1,0 +1,286 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+
+  interface Session {
+    id: string;
+    state: string;
+    agent: string;
+    pid: number | null;
+  }
+
+  interface MenuData {
+    sessions: Session[];
+    is_dnd: boolean;
+    is_mini: boolean;
+    lang: string;
+    size: string;
+  }
+
+  let data: MenuData | null = $state(null);
+  let activeSubmenu: string | null = $state(null);
+  let closing = false;
+
+  const stateIcons: Record<string, string> = {
+    working: '⚡', typing: '⚡', thinking: '💭', juggling: '🎪',
+    idle: '💤', sleeping: '😴', error: '⚠️',
+  };
+  const stateLabelsEn: Record<string, string> = {
+    working: 'Working', typing: 'Working', thinking: 'Thinking',
+    juggling: 'Juggling', idle: 'Idle', sleeping: 'Sleeping',
+  };
+  const stateLabelsZh: Record<string, string> = {
+    working: '工作中', typing: '工作中', thinking: '思考中',
+    juggling: '多任务', idle: '空闲', sleeping: '睡眠',
+  };
+
+  function t(key: string): string {
+    if (!data) return key;
+    const zh: Record<string, string> = {
+      size: '大小', miniMode: '极简模式', dnd: '勿扰模式',
+      sessions: '会话', language: '语言', quit: '退出',
+      noSessions: '没有活跃会话', justNow: '刚刚',
+    };
+    const en: Record<string, string> = {
+      size: 'Size', miniMode: 'Mini Mode', dnd: 'Sleep (Do Not Disturb)',
+      sessions: 'Sessions', language: 'Language', quit: 'Quit',
+      noSessions: 'No active sessions', justNow: 'just now',
+    };
+    return (data.lang === 'zh' ? zh[key] : en[key]) ?? key;
+  }
+
+  function stateLabel(s: string): string {
+    if (!data) return s;
+    return (data.lang === 'zh' ? stateLabelsZh[s] : stateLabelsEn[s]) ?? s;
+  }
+
+  async function action(id: string) {
+    if (closing) return;
+    closing = true;
+    await invoke('menu_action', { id });
+    closeMenu();
+  }
+
+  async function closeMenu() {
+    try { await getCurrentWindow().close(); } catch {}
+  }
+
+  function toggleSubmenu(name: string) {
+    activeSubmenu = activeSubmenu === name ? null : name;
+  }
+
+  onMount(async () => {
+    data = await invoke('get_menu_data');
+
+    // Close on blur (click outside)
+    const win = getCurrentWindow();
+    const unlisten = await win.onFocusChanged(({ payload: focused }) => {
+      if (!focused && !closing) closeMenu();
+    });
+
+    // Close on Escape
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeMenu();
+    };
+    window.addEventListener('keydown', onKey);
+
+    return () => {
+      unlisten();
+      window.removeEventListener('keydown', onKey);
+    };
+  });
+</script>
+
+{#if data}
+<div class="menu">
+  <!-- Size -->
+  <div class="item has-sub" onmouseenter={() => activeSubmenu = 'size'} onmouseleave={() => activeSubmenu = null}>
+    <span>{t('size')}</span>
+    <span class="arrow">›</span>
+    {#if activeSubmenu === 'size'}
+      <div class="submenu">
+        <button class="item" class:checked={data.size === 'S'} onclick={() => action('size-s')}>S</button>
+        <button class="item" class:checked={data.size === 'M'} onclick={() => action('size-m')}>M</button>
+        <button class="item" class:checked={data.size === 'L'} onclick={() => action('size-l')}>L</button>
+      </div>
+    {/if}
+  </div>
+
+  <!-- Mini Mode -->
+  <button class="item" onclick={() => action('mini')}>
+    <span>{t('miniMode')}</span>
+    {#if data.is_mini}<span class="check">✓</span>{/if}
+  </button>
+
+  <!-- DND -->
+  <button class="item" onclick={() => action('dnd')}>
+    <span>{t('dnd')}</span>
+    {#if data.is_dnd}<span class="check">✓</span>{/if}
+  </button>
+
+  <div class="sep"></div>
+
+  <!-- Sessions -->
+  <div class="item has-sub" onmouseenter={() => activeSubmenu = 'sessions'} onmouseleave={() => activeSubmenu = null}>
+    <span>{t('sessions')} ({data.sessions.length})</span>
+    <span class="arrow">›</span>
+    {#if activeSubmenu === 'sessions'}
+      <div class="submenu submenu-sessions">
+        {#if data.sessions.length === 0}
+          <div class="item disabled">{t('noSessions')}</div>
+        {:else}
+          {#each data.sessions as sess}
+            <button class="item session-item" onclick={() => action(`session-${sess.id}`)}>
+              <span class="session-icon">{stateIcons[sess.state] ?? '⚡'}</span>
+              <span class="session-agent">{sess.agent}</span>
+              <span class="session-state">{stateLabel(sess.state)}</span>
+              <span class="session-time">{t('justNow')}</span>
+            </button>
+          {/each}
+        {/if}
+      </div>
+    {/if}
+  </div>
+
+  <div class="sep"></div>
+
+  <!-- Language -->
+  <div class="item has-sub" onmouseenter={() => activeSubmenu = 'language'} onmouseleave={() => activeSubmenu = null}>
+    <span>{t('language')}</span>
+    <span class="arrow">›</span>
+    {#if activeSubmenu === 'language'}
+      <div class="submenu">
+        <button class="item" class:checked={data.lang === 'en'} onclick={() => action('lang-en')}>English</button>
+        <button class="item" class:checked={data.lang === 'zh'} onclick={() => action('lang-zh')}>中文</button>
+      </div>
+    {/if}
+  </div>
+
+  <!-- Quit -->
+  <button class="item quit" onclick={() => action('quit')}>
+    <span>{t('quit')}</span>
+  </button>
+</div>
+{/if}
+
+<style>
+  .menu {
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-radius: 12px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.12),
+      0 2px 8px rgba(0, 0, 0, 0.06);
+    padding: 6px;
+    min-width: 220px;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    color: #1d1d1f;
+    cursor: pointer;
+    border: none;
+    background: none;
+    text-align: left;
+    position: relative;
+    transition: background 0.1s;
+    letter-spacing: -0.01em;
+  }
+  .item:hover {
+    background: rgba(0, 0, 0, 0.06);
+  }
+  .item.disabled {
+    color: #999;
+    cursor: default;
+  }
+  .item.disabled:hover {
+    background: none;
+  }
+  .item.quit {
+    color: #e53e3e;
+  }
+  .item.checked::after {
+    content: '✓';
+    font-size: 12px;
+    color: #3b82f6;
+    margin-left: 8px;
+  }
+
+  .check {
+    font-size: 12px;
+    color: #3b82f6;
+  }
+
+  .arrow {
+    font-size: 16px;
+    color: #aaa;
+    font-weight: 300;
+  }
+
+  .sep {
+    height: 1px;
+    background: rgba(0, 0, 0, 0.08);
+    margin: 4px 10px;
+  }
+
+  .has-sub {
+    cursor: default;
+  }
+
+  .submenu {
+    position: absolute;
+    left: calc(100% + 6px);
+    top: -6px;
+    background: rgba(255, 255, 255, 0.88);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-radius: 12px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.12),
+      0 2px 8px rgba(0, 0, 0, 0.06);
+    padding: 6px;
+    min-width: 180px;
+    z-index: 10;
+  }
+
+  .submenu-sessions {
+    min-width: 260px;
+  }
+
+  .session-item {
+    gap: 8px;
+    justify-content: flex-start;
+  }
+  .session-icon {
+    font-size: 14px;
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .session-agent {
+    font-weight: 600;
+    font-size: 12.5px;
+    color: #1d1d1f;
+  }
+  .session-state {
+    font-size: 12px;
+    color: #666;
+  }
+  .session-time {
+    font-size: 11px;
+    color: #aaa;
+    margin-left: auto;
+  }
+</style>

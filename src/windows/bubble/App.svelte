@@ -29,11 +29,14 @@
 {#if bubbleData}
   <BubbleCard
     id={entryId}
-    toolName={bubbleData.tool_name}
+    windowKind={bubbleData.window_kind}
+    toolName={bubbleData.tool_name ?? ''}
     toolInput={bubbleData.tool_input ?? {}}
     suggestions={bubbleData.suggestions ?? []}
     sessionId={bubbleData.session_id}
     isElicitation={bubbleData.is_elicitation ?? false}
+    modeLabel={bubbleData.mode_label ?? ''}
+    modeDescription={bubbleData.mode_description ?? ''}
   />
 {:else}
   <div style="padding:16px;color:#666">Loading...</div>
