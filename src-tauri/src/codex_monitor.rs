@@ -173,41 +173,36 @@ fn is_codex_session_end(event: &serde_json::Value) -> bool {
         )
 }
 
-/// Find all .jsonl files in the Codex sessions directory.
+/// Maximum age (seconds) for a session file to be considered active.
+const ACTIVE_SESSION_MAX_AGE_SECS: u64 = 3600; // 1 hour
+
+/// Find active .jsonl files in the Codex sessions directory.
 /// Codex nests files under date subdirectories: sessions/YYYY/MM/DD/*.jsonl
+/// Only files modified within the last hour are considered active.
 fn find_codex_jsonl_files(base: &std::path::Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    // Walk up to 3 levels deep: year/month/day
-    let years = match std::fs::read_dir(base) { Ok(e) => e, Err(_) => return files };
-    for year in years.flatten() {
-        let year_path = year.path();
-        if !year_path.is_dir() { continue; }
-        let months = match std::fs::read_dir(&year_path) { Ok(e) => e, Err(_) => continue };
-        for month in months.flatten() {
-            let month_path = month.path();
-            if !month_path.is_dir() { continue; }
-            let days = match std::fs::read_dir(&month_path) { Ok(e) => e, Err(_) => continue };
-            for day in days.flatten() {
-                let day_path = day.path();
-                if !day_path.is_dir() { continue; }
-                let entries = match std::fs::read_dir(&day_path) { Ok(e) => e, Err(_) => continue };
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                        files.push(path);
-                    }
-                }
-            }
-        }
-    }
-    // Also check for .jsonl files directly in base (legacy format)
-    if let Ok(entries) = std::fs::read_dir(base) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                files.push(path);
-            }
-        }
-    }
+    collect_jsonl_recursive(base, &mut files);
+    // Filter to only files modified within the last hour
+    files.retain(|path| {
+        let age = path.metadata().ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(u64::MAX);
+        age <= ACTIVE_SESSION_MAX_AGE_SECS
+    });
     files
+}
+
+/// Recursively collect .jsonl files from a directory tree.
+fn collect_jsonl_recursive(dir: &std::path::Path, files: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_jsonl_recursive(&path, files);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            files.push(path);
+        }
+    }
 }
