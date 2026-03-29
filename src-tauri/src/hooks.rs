@@ -127,8 +127,7 @@ impl HookInstaller {
 
         // Step 3: Register permission HTTP hook under PermissionRequest event.
         // Claude Code sends a blocking HTTP POST to this URL when requesting tool permission.
-        // Format: { hooks: [{ type: "http", url: "...", timeout: 600 }], matcher: "" }
-        // The response JSON { "behavior": "allow"|"deny"|<suggestion> } controls the decision.
+        // Response format: { hookSpecificOutput: { hookEventName, decision: { behavior } } }
         if let Some(port) = self.server_port {
             let perm_url = format!("http://127.0.0.1:{port}/permission");
             let arr = hooks.entry("PermissionRequest")
@@ -151,13 +150,22 @@ impl HookInstaller {
                     true
                 });
                 list.push(serde_json::json!({
-                    "matcher": "",
-                    "hooks": [{
-                        "type": "http",
-                        "url":  perm_url,
-                        "timeout": 600,
-                    }]
+                    "type": "http",
+                    "url":  perm_url,
+                    "timeout": 600,
                 }));
+            }
+        }
+
+        // Step 3b: Clean up stray entries in other events (e.g. old PreToolUse permission hook)
+        for event in ["PreToolUse", "PostToolUse"] {
+            if let Some(arr) = hooks.get_mut(event).and_then(|v| v.as_array_mut()) {
+                arr.retain(|v| {
+                    if let Some(url) = v.get("url").and_then(|u| u.as_str()) {
+                        if url.contains("/permission") { return false; }
+                    }
+                    true
+                });
             }
         }
 

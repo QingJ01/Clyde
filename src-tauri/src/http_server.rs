@@ -148,7 +148,7 @@ async fn post_permission(
 
     let bubble_opened = permission::show_bubble(&ctx.app, &ctx.bubble_map, bubble_data);
     if !bubble_opened {
-        return (StatusCode::OK, headers, Json(json!({ "behavior": "deny" })));
+        return (StatusCode::OK, headers, Json(perm_response("deny")));
     }
     ctx.pending_perms.lock().expect("perms mutex poisoned").insert(entry_id.clone(), tx);
 
@@ -188,7 +188,19 @@ async fn post_permission(
     ctx.pending_perms.lock().expect("perms mutex poisoned").remove(&entry_id);
     permission::close_bubble(&ctx.app, &ctx.bubble_map, &entry_id);
 
-    (StatusCode::OK, headers, Json(json!({ "behavior": decision.behavior })))
+    (StatusCode::OK, headers, Json(perm_response(&decision.behavior)))
+}
+
+/// Build the response format Claude Code expects for PermissionRequest HTTP hooks.
+fn perm_response(behavior: &str) -> Value {
+    json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": {
+                "behavior": behavior
+            }
+        }
+    })
 }
 
 pub async fn start_server(app: AppHandle, state: SharedState, pending_perms: PendingPerms, bubble_map: permission::BubbleMap) -> Option<u16> {
