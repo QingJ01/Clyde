@@ -1,3 +1,5 @@
 {
-  "type": "commonjs"
+  "type": "commonjs",
+  "private": true,
+  "description": "Hook scripts use CommonJS (require/module.exports) because they run standalone via 'node hooks/install.js', not through the Vite/ESM build pipeline. This file prevents the root package.json's \"type\": \"module\" from forcing ESM on these scripts."
 }

@@ -218,14 +218,23 @@ function syncHttpHook(entries, expectedUrl) {
   return { found, changed };
 }
 
-function removeFlatHttpHooks(entries, marker) {
+/**
+ * Remove flat (non-nested) HTTP hook entries whose URL matches the Clyde
+ * permission endpoint pattern: http://127.0.0.1:<port>/permission
+ * Uses an exact pattern match to avoid accidentally removing unrelated hooks
+ * that happen to contain "/permission" as a substring.
+ */
+function removeFlatHttpHooks(entries) {
   if (!Array.isArray(entries)) return { entries: [], removed: 0, changed: false };
 
+  const CLYDE_PERM_URL = /^https?:\/\/127\.0\.0\.1:\d+\/permission$/;
   let removed = 0;
   const nextEntries = entries.filter((entry) => {
     if (!entry || typeof entry !== "object") return true;
+    // Only remove flat entries (type+url at top level, no nested hooks array)
     if (entry.type !== "http" || typeof entry.url !== "string") return true;
-    if (!entry.url.includes(marker)) return true;
+    if (entry.hooks) return true; // already nested format, not a flat entry
+    if (!CLYDE_PERM_URL.test(entry.url)) return true;
     removed++;
     return false;
   });
@@ -342,6 +351,7 @@ function registerHooks(options = {}) {
   let versionSkipped = 0;
   let updated = 0;
   let removed = 0;
+  let migrated = 0; // flat → nested format conversions
   let changed = false;
 
   // Detect CC version for versioned hooks filtering
@@ -460,10 +470,10 @@ function registerHooks(options = {}) {
       changed = true;
     }
 
-    const flatCleanup = removeFlatHttpHooks(settings.hooks[event], HTTP_MARKER);
+    const flatCleanup = removeFlatHttpHooks(settings.hooks[event]);
     if (flatCleanup.changed) {
       settings.hooks[event] = flatCleanup.entries;
-      removed += flatCleanup.removed;
+      migrated += flatCleanup.removed;
       changed = true;
     }
 
@@ -503,6 +513,7 @@ function registerHooks(options = {}) {
     console.log(`  Added: ${added} hooks`);
     if (updated > 0) console.log(`  Updated: ${updated} stale hook paths`);
     if (removed > 0) console.log(`  Removed: ${removed} incompatible versioned hooks`);
+    if (migrated > 0) console.log(`  Migrated: ${migrated} flat hook entries to nested format`);
     if (skipped > 0) console.log(`  Skipped: ${skipped} (already registered)`);
     if (versionSkipped > 0) {
       const reason = versionInfo.status === "known"
@@ -521,6 +532,7 @@ function registerHooks(options = {}) {
     skipped,
     updated,
     removed,
+    migrated,
     version: versionInfo.version,
     versionStatus: versionInfo.status,
     versionSource: versionInfo.source,
