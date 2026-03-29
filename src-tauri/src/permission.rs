@@ -42,18 +42,23 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
 
     let (x, y) = initial_bubble_position(app, bubbles);
 
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("")
         .inner_size(BUBBLE_WIDTH as f64, 200.0)
         .position(x as f64, y as f64)
         .decorations(false)
-        .transparent(true)
-        .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .visible(true)
-        .build();
+        .visible(true);
+
+    // transparent() and shadow() are only available on Windows/Linux
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder.transparent(true).shadow(false);
+    }
+
+    let window = builder.build();
 
     match window {
         Ok(_) => {
