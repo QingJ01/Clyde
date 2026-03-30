@@ -114,6 +114,7 @@ const translations = {
     'dl.title': '把 Clyde 放到你的桌面',
     'dl.sub': '免费、开源、约 5 MB。支持 Windows、macOS 和 Linux。',
     'dl.source': '或 <a href="https://github.com/QingJ01/Clyde" target="_blank" rel="noopener">从源码构建</a>',
+    'footer.friends': '友链：',
     'footer.disclaimer': '非 Anthropic 官方产品。Clyde 为社区创作。',
   }
 };

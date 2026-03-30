@@ -77,7 +77,7 @@ section { padding: var(--section-py) 0; }
   border: 1px solid var(--border); color: var(--text-2); transition: all .2s;
 }
 #lang-toggle:hover { border-color: var(--accent); color: var(--accent); }
-.header-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.header-actions { display: flex; align-items: center; gap: 10px; }
 #hamburger { display: none; flex-direction: column; gap: 5px; width: 28px; padding: 4px 0; }
 #hamburger span { display: block; height: 2px; background: var(--text); border-radius: 2px; transition: all .3s; }
 
@@ -263,6 +263,10 @@ footer {
 .footer-links { display: flex; gap: 24px; }
 .footer-links a { color: rgba(255,255,255,.45); font-size: .85rem; transition: color .2s; }
 .footer-links a:hover { color: var(--accent); }
+.footer-friends { width: 100%; text-align: center; margin-top: 12px; display: flex; justify-content: center; align-items: center; gap: 16px; flex-wrap: wrap; }
+.footer-friends span { color: rgba(255,255,255,.35); font-size: .82rem; }
+.footer-friends a { color: rgba(255,255,255,.45); font-size: .82rem; transition: color .2s; }
+.footer-friends a:hover { color: var(--accent); }
 .footer-disclaimer { font-size: .78rem; color: rgba(255,255,255,.3); width: 100%; text-align: center; margin-top: 16px; }
 
 /* ---------- Responsive ---------- */
