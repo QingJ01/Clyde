@@ -67,7 +67,7 @@ const translations = {
     'nav.download': '下载',
     'hero.pill': '开源 · AGPL-3.0',
     'hero.title': '你的 AI 助手，<br/>活在桌面上',
-    'hero.sub': '一只轻量级桌面宠物，实时映射 AI 编程助手的工作状态。提问时思考，跑工具时打字，任务完成时庆祝。',
+    'hero.sub': '一只轻量级桌面宠物，实时映射 AI 编程助手的工作状态。开箱适配 Claude Code 和 Codex。提问时思考，跑工具时打字，任务完成时庆祝。',
     'hero.download': '免费下载',
     'hero.bundle': '安装包',
     'hero.startup': '启动速度',
