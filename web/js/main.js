@@ -119,7 +119,18 @@ const translations = {
 };
 
 const enCache = {};
-let currentLang = 'en';
+
+// Detect initial language: URL param > localStorage > browser language
+function detectLang() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('lang') === 'zh' || params.get('lang') === 'en') return params.get('lang');
+  const stored = localStorage.getItem('clyde-lang');
+  if (stored === 'zh' || stored === 'en') return stored;
+  const nav = navigator.language || navigator.userLanguage || '';
+  return nav.startsWith('zh') ? 'zh' : 'en';
+}
+
+let currentLang = detectLang();
 
 // Cache original English text
 document.querySelectorAll('[data-i18n]').forEach((el) => {
@@ -128,6 +139,7 @@ document.querySelectorAll('[data-i18n]').forEach((el) => {
 
 function setLang(lang) {
   currentLang = lang;
+  localStorage.setItem('clyde-lang', lang);
   document.querySelectorAll('[data-i18n]').forEach((el) => {
     const key = el.getAttribute('data-i18n');
     if (lang === 'zh' && translations.zh[key]) {
@@ -137,7 +149,12 @@ function setLang(lang) {
     }
   });
   document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  // Update toggle button text
+  document.getElementById('lang-toggle').textContent = lang === 'zh' ? 'EN / 中文' : 'EN / 中文';
 }
+
+// Apply detected language on load
+if (currentLang === 'zh') setLang('zh');
 
 document.getElementById('lang-toggle').addEventListener('click', () => {
   setLang(currentLang === 'en' ? 'zh' : 'en');
