@@ -78,8 +78,8 @@ section { padding: var(--section-py) 0; }
 }
 #lang-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
-#hamburger { display: none; flex-direction: column; gap: 5px; width: 28px; padding: 4px 0; }
-#hamburger span { display: block; height: 2px; background: var(--text); border-radius: 2px; transition: all .3s; }
+#hamburger { display: none; flex-direction: column; justify-content: center; gap: 5px; width: 32px; height: 32px; padding: 4px; background: none; border: none; cursor: pointer; }
+#hamburger span { display: block; width: 100%; height: 2px; background: var(--text); border-radius: 2px; transition: all .3s; }
 
 /* ---------- Hero ---------- */
 #hero { padding: 160px 0 var(--section-py); min-height: 100vh; display: flex; flex-direction: column; justify-content: center; }
@@ -277,7 +277,7 @@ footer {
   :root { --section-py: 72px; }
   #main-nav { display: none; position: absolute; top: 64px; left: 0; right: 0; flex-direction: column; background: var(--bg); border-bottom: 1px solid var(--border); padding: 16px 24px; gap: 16px; box-shadow: 0 8px 24px rgba(0,0,0,.06); }
   #main-nav.open { display: flex; }
-  #hamburger { display: flex; }
+  #hamburger { display: flex; flex-direction: column; }
   .hero-grid { grid-template-columns: 1fr; text-align: center; }
   .hero-text h1 { font-size: 2rem; }
   .hero-sub { margin: 0 auto 36px; }
