@@ -202,6 +202,7 @@ npm test             # cargo test（19 个单元测试）
 
 - 由 [Clawd on Desk](https://github.com/rullerzhou-afk/clawd-on-desk) ([@rullerzhou-afk](https://github.com/rullerzhou-afk)) 演化而来 — 最初的 Clawd 桌宠项目
 - Clyde 像素风格参考自 [clawd-tank](https://github.com/marciogranzotto/clawd-tank) by [@marciogranzotto](https://github.com/marciogranzotto)
+- 感谢 [LINUX DO](https://linux.do/) 社区的反馈与支持
 - Clyde 角色（"ClawdWizard"）为社区创作。本项目非 [Anthropic](https://www.anthropic.com) 官方产品。
 
 ## 许可证

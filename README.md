@@ -201,6 +201,7 @@ npm test             # cargo test (19 unit tests)
 
 - Forked from [Clawd on Desk](https://github.com/rullerzhou-afk/clawd-on-desk) by [@rullerzhou-afk](https://github.com/rullerzhou-afk) — the original Clawd desktop pet project that inspired Clyde
 - Clyde pixel art reference from [clawd-tank](https://github.com/marciogranzotto/clawd-tank) by [@marciogranzotto](https://github.com/marciogranzotto)
+- Thanks to the [LINUX DO](https://linux.do/) community for feedback and support
 - The Clyde character ("ClawdWizard") is a community creation. This project is not officially affiliated with or endorsed by [Anthropic](https://www.anthropic.com).
 
 ## License
