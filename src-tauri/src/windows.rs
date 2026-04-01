@@ -127,6 +127,17 @@ pub struct MonitorBounds {
     pub height: u32,
 }
 
+/// Construct pet bounds from persisted prefs (used at startup before window is fully rendered).
+pub fn startup_pet_bounds(prefs: &crate::prefs::Prefs) -> WindowBounds {
+    let (width, height) = crate::prefs::size_to_pixels(&prefs.size);
+    WindowBounds { x: prefs.x, y: prefs.y, width, height }
+}
+
+/// Construct bounds with same position but new size (used after set_size to avoid race).
+pub fn resized_pet_bounds(current: &WindowBounds, width: u32, height: u32) -> WindowBounds {
+    WindowBounds { x: current.x, y: current.y, width, height }
+}
+
 pub fn show_hit_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("hit") {
         let _ = w.show();
@@ -172,5 +183,27 @@ mod tests {
         assert!(rect.top <= 5.0, "interactive hit area should start near top edge");
         assert!(rect.right >= 195.0, "interactive hit area should reach near right edge");
         assert!(rect.bottom >= 195.0, "interactive hit area should reach near bottom edge");
+    }
+
+    #[test]
+    fn test_startup_bounds_use_stored_prefs() {
+        let prefs = crate::prefs::Prefs {
+            x: 100, y: 100, size: "L".into(), ..Default::default()
+        };
+        let bounds = startup_pet_bounds(&prefs);
+        assert_eq!(bounds.x, 100);
+        assert_eq!(bounds.y, 100);
+        assert_eq!(bounds.width, 360);
+        assert_eq!(bounds.height, 360);
+    }
+
+    #[test]
+    fn test_resized_bounds_keep_position() {
+        let current = WindowBounds { x: 320, y: 180, width: 200, height: 200 };
+        let resized = resized_pet_bounds(&current, 360, 360);
+        assert_eq!(resized.x, 320);
+        assert_eq!(resized.y, 180);
+        assert_eq!(resized.width, 360);
+        assert_eq!(resized.height, 360);
     }
 }

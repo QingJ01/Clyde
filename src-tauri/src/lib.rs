@@ -480,10 +480,15 @@ fn trigger_wake(app: AppHandle, state: tauri::State<'_, SharedState>, abort_hand
 
 #[tauri::command]
 fn set_window_size(app: AppHandle, size: String, prefs: tauri::State<SharedPrefs>) {
-    if let Some(pet) = app.get_webview_window("pet") {
+    if let Some(_pet) = app.get_webview_window("pet") {
+        // Capture position BEFORE resize (set_size may not update geometry instantly)
+        let current_bounds = windows::get_pet_bounds(&app);
         let (w, h) = prefs::size_to_pixels(&size);
-        let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
-        sync_hit(&app);
+        let _ = _pet.set_size(tauri::PhysicalSize::new(w, h));
+        if let Some(current) = current_bounds {
+            let updated = windows::resized_pet_bounds(&current, w, h);
+            windows::sync_hit_window(&app, &updated, &windows::HitBox::INTERACTIVE);
+        }
         let mut p = prefs.lock_or_recover();
         p.size = size;
         prefs::save(&app, &p);
@@ -552,7 +557,7 @@ fn setup_pet_window(app: &AppHandle, prefs: &prefs::Prefs) {
     pet.open_devtools();
 }
 
-fn setup_hit_window(app: &AppHandle) {
+fn setup_hit_window(app: &AppHandle, prefs: &prefs::Prefs) {
     if let Some(hit) = app.get_webview_window("hit") {
         // macOS needs a near-transparent background (not fully transparent)
         // to receive pointer events. Windows/Linux work with fully transparent.
@@ -561,13 +566,12 @@ fn setup_hit_window(app: &AppHandle) {
         #[cfg(not(target_os = "macos"))]
         let _ = hit.set_background_color(Some(Color(0, 0, 0, 0)));
     }
-    if let Some(bounds) = windows::get_pet_bounds(app) {
-        windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
-        windows::show_hit_window(app);
-        println!("Clyde: hit window synced to pet bounds");
-    } else {
-        eprintln!("Clyde: could not get pet bounds for hit window sync");
-    }
+    // Use prefs-based bounds instead of reading window geometry (avoids race
+    // where the window hasn't fully rendered yet at startup).
+    let bounds = windows::startup_pet_bounds(prefs);
+    windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
+    windows::show_hit_window(app);
+    println!("Clyde: hit window synced to startup bounds");
 }
 
 fn setup_tray(app: &AppHandle, prefs: &prefs::Prefs, shared_tray: &tray::SharedTray) {
@@ -641,7 +645,7 @@ pub fn run() {
             *shared_prefs.lock_or_recover() = prefs.clone();
 
             setup_pet_window(app.handle(), &prefs);
-            setup_hit_window(app.handle());
+            setup_hit_window(app.handle(), &prefs);
             setup_tray(app.handle(), &prefs, &shared_tray);
 
             // Save position on close
