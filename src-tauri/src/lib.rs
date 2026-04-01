@@ -162,6 +162,16 @@ fn drag_end(app: AppHandle, drag: tauri::State<SharedDrag>, abort_handle: tauri:
         // Normal click or drag end — sync hit window
         sync_hit(&app);
     }
+
+    // Persist position after every drag so it survives crashes/force-quit
+    if was_dragging {
+        if let (Some(bounds), Some(prefs_state)) = (windows::get_pet_bounds(&app), app.try_state::<SharedPrefs>()) {
+            let mut p = prefs_state.lock_or_recover();
+            p.x = bounds.x;
+            p.y = bounds.y;
+            prefs::save(&app, &p);
+        }
+    }
 }
 
 #[tauri::command]
