@@ -55,13 +55,19 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS ad-hoc signing (no Apple Developer account needed)
+          # This makes the .app runnable on Apple Silicon without manual codesign
+          APPLE_SIGNING_IDENTITY: '-'
         with:
           tagName: ${{ github.ref_name }}
           releaseName: '${{ github.ref_name }} — Clyde on Desk'
           releaseBody: |
             See [CHANGELOG.md](https://github.com/QingJ01/Clyde/blob/main/CHANGELOG.md) for details.
 
-            **macOS users**: If you see "App is damaged", run: `xattr -cr "/Applications/Clyde on Desk.app"`
+            **macOS users**: If you see "App is damaged", run:
+            ```bash
+            xattr -cr "/Applications/Clyde on Desk.app"
+            ```
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}

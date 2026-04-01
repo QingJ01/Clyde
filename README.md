@@ -150,9 +150,10 @@ This is macOS Gatekeeper blocking unsigned apps — the app is not actually dama
 
 ```bash
 xattr -cr "/Applications/Clyde on Desk.app"
+codesign --force --deep --sign - "/Applications/Clyde on Desk.app"
 ```
 
-Or go to **System Settings → Privacy & Security** and click **Open Anyway**.
+The first command clears the quarantine flag, the second adds an ad-hoc signature (required on Apple Silicon).
 
 ### Permission bubbles not appearing
 

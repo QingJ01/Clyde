@@ -150,9 +150,10 @@ assets/svg/              35 个动画帧
 
 ```bash
 xattr -cr "/Applications/Clyde on Desk.app"
+codesign --force --deep --sign - "/Applications/Clyde on Desk.app"
 ```
 
-或进入 **系统设置 → 隐私与安全性**，点击 **仍要打开**。
+第一条命令清除隔离标记，第二条添加本地临时签名（Apple Silicon 必需）。
 
 ### 权限气泡不弹出
 
