@@ -36,6 +36,7 @@
   let unlisten: UnlistenFn[] = [];
   let isReacting = false;
   let reactTimer: ReturnType<typeof setTimeout> | null = null;
+  let snapPreview = $state(false);
 
   function movePupils(dx: number, dy: number) {
     // Eyes follow cursor (larger movement)
@@ -85,6 +86,10 @@
       svgContent = getSvg('clyde-react-drag.svg');
     }));
 
+    unlisten.push(await listen<{ active: boolean }>('snap-preview', ({ payload }) => {
+      snapPreview = payload.active;
+    }));
+
     unlisten.push(await listen('trigger-yawn', () => { invoke('trigger_sleep_sequence'); }));
     unlisten.push(await listen('trigger-wake', () => { invoke('trigger_wake'); }));
     unlisten.push(await listen('mini-peek-in', () => { invoke('mini_peek_in'); }));
@@ -102,7 +107,7 @@
   });
 </script>
 
-<div id="pet-container">
+<div id="pet-container" class:snap-preview={snapPreview}>
   <div class="svg-wrapper" style:transform={flipped ? 'scaleX(-1)' : ''}>
     {@html svgContent}
   </div>
@@ -125,6 +130,15 @@
     display: block;
     width: 100%;
     height: 100%;
+  }
+  /* Snap preview: scale down + slight transparency when near screen edge during drag */
+  #pet-container.snap-preview {
+    transform: scale(0.7);
+    opacity: 0.6;
+    transition: transform 150ms ease-out, opacity 150ms ease-out;
+  }
+  #pet-container:not(.snap-preview) {
+    transition: transform 150ms ease-out, opacity 150ms ease-out;
   }
   /* Smooth eye/body tracking — interpolate between 50ms tick updates */
   .svg-wrapper :global(#eyes-js),

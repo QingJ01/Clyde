@@ -17,31 +17,36 @@ pub enum SnapSide { Left, Right }
 
 pub fn should_snap_to_edge(app: &AppHandle) -> Option<EdgeSnap> {
     let bounds = get_pet_bounds(app)?;
-    let monitor = app.primary_monitor().ok()??;
-    let screen_w = monitor.size().width as i32;
+    let mon = crate::windows::get_pet_monitor(app);
+    let mon_left = mon.x;
+    let mon_right = mon.x + mon.width as i32;
     let pet_right = bounds.x + bounds.width as i32;
 
-    if screen_w - pet_right <= SNAP_TOLERANCE {
-        Some(EdgeSnap { screen_w, width: bounds.width, side: SnapSide::Right })
-    } else if bounds.x <= SNAP_TOLERANCE {
-        Some(EdgeSnap { screen_w, width: bounds.width, side: SnapSide::Left })
+    if mon_right - pet_right <= SNAP_TOLERANCE {
+        Some(EdgeSnap { mon_left, mon_right, width: bounds.width, side: SnapSide::Right })
+    } else if bounds.x - mon_left <= SNAP_TOLERANCE {
+        Some(EdgeSnap { mon_left, mon_right, width: bounds.width, side: SnapSide::Left })
     } else {
         None
     }
 }
 
 pub struct EdgeSnap {
-    pub screen_w: i32,
+    /// Left edge of the monitor the pet is on (0 for primary, may be negative for left monitors).
+    pub mon_left: i32,
+    /// Right edge of the monitor the pet is on.
+    pub mon_right: i32,
     pub width: u32,
     pub side: SnapSide,
 }
 
 impl EdgeSnap {
     /// The X position where the pet hides at the edge (partially off-screen).
+    /// Uses monitor-relative coordinates so it works on any monitor.
     pub fn hidden_x(&self) -> i32 {
         match self.side {
-            SnapSide::Right => self.screen_w - (self.width as f64 * MINI_OFFSET_RATIO).round() as i32,
-            SnapSide::Left  => -((self.width as f64 * (1.0 - MINI_OFFSET_RATIO)).round() as i32),
+            SnapSide::Right => self.mon_right - (self.width as f64 * MINI_OFFSET_RATIO).round() as i32,
+            SnapSide::Left  => self.mon_left - (self.width as f64 * (1.0 - MINI_OFFSET_RATIO)).round() as i32,
         }
     }
 }
@@ -86,13 +91,12 @@ pub fn do_enter_mini(app: &AppHandle) -> bool {
         let bounds = match get_pet_bounds(app) { Some(b) => b, None => return false };
         (snap.hidden_x(), bounds.x, bounds.y)
     } else {
-        // Not near any edge (triggered from tray/context menu) — default to right edge
-        let monitor = match app.primary_monitor().ok().flatten() { Some(m) => m, None => return false };
-        let screen_w = monitor.size().width as i32;
+        // Not near any edge (triggered from tray/context menu) — default to right edge of current monitor
+        let mon = crate::windows::get_pet_monitor(app);
         let pet = match app.get_webview_window("pet") { Some(p) => p, None => return false };
         let size = pet.outer_size().unwrap_or_default();
         let pos = pet.outer_position().unwrap_or_default();
-        let hx = screen_w - (size.width as f64 * MINI_OFFSET_RATIO).round() as i32;
+        let hx = (mon.x + mon.width as i32) - (size.width as f64 * MINI_OFFSET_RATIO).round() as i32;
         (hx, pos.x, pos.y)
     };
 

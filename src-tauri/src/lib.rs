@@ -88,25 +88,34 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     let pet_w = bounds.as_ref().map(|b| b.width).unwrap_or(prefs::DEFAULT_PET_DIMENSION);
     let pet_h = bounds.as_ref().map(|b| b.height).unwrap_or(prefs::DEFAULT_PET_DIMENSION);
 
-    // Clamp to screen bounds: keep at least 30px of the pet visible
-    if let Some(monitor) = app.primary_monitor().ok().flatten() {
-        let screen_w = monitor.size().width as i32;
-        let screen_h = monitor.size().height as i32;
-        const MIN_VISIBLE: i32 = 30;
-        new_x = new_x.max(MIN_VISIBLE - pet_w as i32).min(screen_w - MIN_VISIBLE);
-        new_y = new_y.max(0).min(screen_h - MIN_VISIBLE);
-    }
+    // Clamp to current monitor bounds: keep at least 30px visible
+    let mon = windows::get_pet_monitor(&app);
+    const MIN_VISIBLE: i32 = 30;
+    new_x = new_x.max(mon.x + MIN_VISIBLE - pet_w as i32).min(mon.x + mon.width as i32 - MIN_VISIBLE);
+    new_y = new_y.max(mon.y).min(mon.y + mon.height as i32 - MIN_VISIBLE);
 
     if let Some(pet) = app.get_webview_window("pet") {
         let _ = pet.set_position(PhysicalPosition::new(new_x, new_y));
     }
-    // Construct updated bounds from the new position + known size (avoid second IPC query)
+
+    // Snap preview: check if we're near an edge and show visual feedback
     let updated = windows::WindowBounds { x: new_x, y: new_y, width: pet_w, height: pet_h };
+    let near_edge = {
+        let mon_left = mon.x;
+        let mon_right = mon.x + mon.width as i32;
+        let pet_right = new_x + pet_w as i32;
+        (mon_right - pet_right <= mini::SNAP_TOLERANCE) || (new_x - mon_left <= mini::SNAP_TOLERANCE)
+    };
+    let _ = app.emit("snap-preview", serde_json::json!({ "active": near_edge }));
+
     windows::sync_hit_window(&app, &updated, &windows::HitBox::INTERACTIVE);
 }
 
 #[tauri::command]
 fn drag_end(app: AppHandle, drag: tauri::State<SharedDrag>, abort_handle: tauri::State<'_, SleepAbortHandle>) {
+    // Clear snap preview
+    let _ = app.emit("snap-preview", serde_json::json!({ "active": false }));
+
     let was_dragging = {
         let mut d = drag.lock_or_recover();
         let dragging = d.dragging;

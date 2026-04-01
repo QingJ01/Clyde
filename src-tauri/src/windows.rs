@@ -70,14 +70,12 @@ pub fn sync_hit_window(app: &AppHandle, pet_bounds: &WindowBounds, hb: &HitBox) 
     let h = (rect.bottom - rect.top).round() as u32;
     if w <= 0 || h == 0 { return; }
 
-    // Clamp to screen bounds so the hit window is always clickable.
-    // NOTE: w can go negative after clamping (pet mostly off-screen), so the
-    // `w <= 0` guard below is critical before the `w as u32` cast.
-    if let Some(monitor) = app.primary_monitor().ok().flatten() {
-        let screen_w = monitor.size().width as i32;
-        if x < 0 { w += x; x = 0; }              // trim left overflow
-        if x + w > screen_w { w = screen_w - x; } // trim right overflow
-    }
+    // Clamp to current monitor bounds so the hit window is always clickable.
+    let mon = get_pet_monitor(app);
+    let mon_left = mon.x;
+    let mon_right = mon.x + mon.width as i32;
+    if x < mon_left { w -= mon_left - x; x = mon_left; }
+    if x + w > mon_right { w = mon_right - x; }
     if w <= 0 { return; }
 
     let _ = hit_win.set_position(PhysicalPosition::new(x, y));
@@ -92,6 +90,40 @@ pub fn get_pet_bounds(app: &AppHandle) -> Option<WindowBounds> {
         x: pos.x, y: pos.y,
         width: size.width, height: size.height,
     })
+}
+
+/// Get the monitor the pet window is currently on.
+/// Falls back to primary monitor, then to default screen size.
+pub fn get_pet_monitor(app: &AppHandle) -> MonitorBounds {
+    // Try the monitor the pet is actually on
+    if let Some(pet) = app.get_webview_window("pet") {
+        if let Ok(Some(monitor)) = pet.current_monitor() {
+            let pos = monitor.position();
+            let size = monitor.size();
+            return MonitorBounds {
+                x: pos.x, y: pos.y,
+                width: size.width, height: size.height,
+            };
+        }
+    }
+    // Fallback to primary
+    if let Some(monitor) = app.primary_monitor().ok().flatten() {
+        let pos = monitor.position();
+        let size = monitor.size();
+        return MonitorBounds {
+            x: pos.x, y: pos.y,
+            width: size.width, height: size.height,
+        };
+    }
+    MonitorBounds { x: 0, y: 0, width: 1920, height: 1080 }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MonitorBounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
 }
 
 pub fn show_hit_window(app: &AppHandle) {
