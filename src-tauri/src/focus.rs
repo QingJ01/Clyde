@@ -85,7 +85,7 @@ pub fn focus_window_by_pid(pid: u32, _cwd: &str) {
 
 #[tauri::command]
 pub fn focus_terminal_for_session(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     state: tauri::State<crate::state_machine::SharedState>,
     session_id: String,
 ) {
