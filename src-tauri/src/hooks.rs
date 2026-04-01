@@ -112,17 +112,22 @@ impl HookInstaller {
                     }
                     true
                 });
-                // For SessionStart, insert auto-start before the main hook
+                // All hooks must use nested { matcher, hooks[] } format.
+                // For SessionStart, combine auto-start + main hook in one entry.
                 if *event == "SessionStart" {
                     list.push(serde_json::json!({
-                        "type":    "command",
-                        "command": auto_start_cmd,
+                        "matcher": "",
+                        "hooks": [
+                            { "type": "command", "command": auto_start_cmd },
+                            { "type": "command", "command": hook_cmd },
+                        ]
+                    }));
+                } else {
+                    list.push(serde_json::json!({
+                        "matcher": "",
+                        "hooks": [{ "type": "command", "command": hook_cmd }]
                     }));
                 }
-                list.push(serde_json::json!({
-                    "type":    "command",
-                    "command": hook_cmd,
-                }));
             }
         }
 
@@ -266,12 +271,16 @@ mod tests {
         let contents = std::fs::read_to_string(&tmp_file).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         let arr = parsed["hooks"]["SessionStart"].as_array().unwrap();
-        // SessionStart has 2 entries: auto-start + main hook
-        assert_eq!(arr.len(), 2, "SessionStart should have auto-start and main hook");
-        let auto_cmd = arr[0]["command"].as_str().unwrap();
-        assert!(auto_cmd.contains(AUTO_START_NAME), "first entry should be auto-start");
-        let main_cmd = arr[1]["command"].as_str().unwrap();
-        assert!(main_cmd.contains(HOOK_SCRIPT_NAME), "second entry should be main hook");
+        // SessionStart has 1 nested entry containing auto-start + main hook
+        assert_eq!(arr.len(), 1, "SessionStart should have one nested entry");
+        let entry = &arr[0];
+        assert_eq!(entry["matcher"].as_str().unwrap(), "", "must have empty matcher");
+        let inner = entry["hooks"].as_array().unwrap();
+        assert_eq!(inner.len(), 2, "inner hooks should have auto-start + main hook");
+        let auto_cmd = inner[0]["command"].as_str().unwrap();
+        assert!(auto_cmd.contains(AUTO_START_NAME), "first hook should be auto-start");
+        let main_cmd = inner[1]["command"].as_str().unwrap();
+        assert!(main_cmd.contains(HOOK_SCRIPT_NAME), "second hook should be main hook");
         assert!(main_cmd.contains("SessionStart"), "hook command should include event name");
 
         // PermissionRequest should have a nested HTTP hook entry with matcher
@@ -303,7 +312,7 @@ mod tests {
         let contents = std::fs::read_to_string(&tmp_file).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         let arr = parsed["hooks"]["SessionStart"].as_array().unwrap();
-        assert_eq!(arr.len(), 2, "should not register hook twice (auto-start + main)");
+        assert_eq!(arr.len(), 1, "should not register hook twice (one nested entry)");
 
         // PermissionRequest should not duplicate
         let perm_arr = parsed["hooks"]["PermissionRequest"].as_array().unwrap();
