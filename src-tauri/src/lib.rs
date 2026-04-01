@@ -84,18 +84,22 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     let mut new_x = base_x + dx as i32;
     let mut new_y = base_y + dy as i32;
 
-    // All drag math uses logical pixels (matching frontend screenX/screenY).
-    // get_pet_monitor() returns logical bounds so clamp is consistent.
-    let mon = windows::get_pet_monitor(&app);
+    // Drag math uses logical pixels (matching frontend screenX/screenY).
+    // get_pet_monitor() returns physical — convert to logical for clamp.
+    let mon_phys = windows::get_pet_monitor(&app);
     let scale = app.get_webview_window("pet")
         .and_then(|p| p.scale_factor().ok()).unwrap_or(1.0);
+    let mon_x = (mon_phys.x as f64 / scale).round() as i32;
+    let mon_y = (mon_phys.y as f64 / scale).round() as i32;
+    let mon_w = (mon_phys.width as f64 / scale).round() as i32;
+    let mon_h = (mon_phys.height as f64 / scale).round() as i32;
     let pet_size = app.get_webview_window("pet")
         .and_then(|p| p.outer_size().ok()).unwrap_or_default();
     let pet_w_log = (pet_size.width as f64 / scale).round() as i32;
 
     const MIN_VISIBLE: i32 = 30;
-    new_x = new_x.max(mon.x + MIN_VISIBLE - pet_w_log).min(mon.x + mon.width as i32 - MIN_VISIBLE);
-    new_y = new_y.max(mon.y).min(mon.y + mon.height as i32 - MIN_VISIBLE);
+    new_x = new_x.max(mon_x + MIN_VISIBLE - pet_w_log).min(mon_x + mon_w - MIN_VISIBLE);
+    new_y = new_y.max(mon_y).min(mon_y + mon_h - MIN_VISIBLE);
 
     // Convert logical → physical for set_position
     if let Some(pet) = app.get_webview_window("pet") {
@@ -107,9 +111,9 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
 
     // Snap preview (logical coords)
     let near_edge = {
-        let mon_right = mon.x + mon.width as i32;
+        let mon_right = mon_x + mon_w;
         let pet_right = new_x + pet_w_log;
-        (mon_right - pet_right <= mini::SNAP_TOLERANCE) || (new_x - mon.x <= mini::SNAP_TOLERANCE)
+        (mon_right - pet_right <= mini::SNAP_TOLERANCE) || (new_x - mon_x <= mini::SNAP_TOLERANCE)
     };
     let _ = app.emit("snap-preview", serde_json::json!({ "active": near_edge }));
 

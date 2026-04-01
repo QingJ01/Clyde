@@ -84,66 +84,68 @@ pub fn close_bubble(app: &AppHandle, bubbles: &BubbleMap, id: &str) {
     reposition_bubbles(app, bubbles);
 }
 
+/// All bubble positioning uses **physical pixels** (matching get_pet_bounds,
+/// PhysicalPosition, etc.). Design constants (BUBBLE_WIDTH, BUBBLE_MARGIN)
+/// are scaled by DPI at use sites.
 pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
     let mut entries: Vec<(String, u32)> = bubbles.lock_or_recover()
         .iter().map(|(id, e)| (id.clone(), e.measured_height)).collect();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     if entries.is_empty() { return; }
 
+    let scale = get_scale(app);
+    let bw = scaled(BUBBLE_WIDTH, scale);
+    let bm = scaled(BUBBLE_MARGIN, scale);
+    let bg = scaled(BUBBLE_GAP, scale);
+
     let (screen_w, _) = get_work_area(app);
     let (anchor_x, anchor_y, pet_h) = get_pet_anchor(app);
 
-    // Total height needed for all bubbles
-    let total_h: u32 = entries.iter().map(|(_, h)| h + BUBBLE_GAP).sum::<u32>();
-
-    // Decide direction: stack above pet if there's room, otherwise below
-    let stack_above = anchor_y as u32 >= total_h + BUBBLE_MARGIN;
+    let total_h: i32 = entries.iter().map(|(_, h)| *h as i32 + bg).sum();
+    let stack_above = anchor_y >= total_h + bm;
 
     if stack_above {
-        // Stack upward from pet's top edge
         let mut y_bottom = anchor_y;
         for (id, height) in &entries {
             let label = format!("bubble-{id}");
             if let Some(win) = app.get_webview_window(&label) {
-                let x = center_bubble_x(anchor_x, pet_h, screen_w);
-                let y = y_bottom.saturating_sub(*height as i32 + BUBBLE_GAP as i32);
+                let x = center_bubble_x(anchor_x, pet_h, screen_w, bw, bm);
+                let y = y_bottom - *height as i32 - bg;
                 let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
                 y_bottom = y;
             }
         }
     } else {
-        // Stack downward from pet's bottom edge
-        let mut y_top = anchor_y + pet_h as i32 + BUBBLE_GAP as i32;
+        let mut y_top = anchor_y + pet_h as i32 + bg;
         for (id, height) in &entries {
             let label = format!("bubble-{id}");
             if let Some(win) = app.get_webview_window(&label) {
-                let x = center_bubble_x(anchor_x, pet_h, screen_w);
+                let x = center_bubble_x(anchor_x, pet_h, screen_w, bw, bm);
                 let _ = win.set_position(tauri::PhysicalPosition::new(x, y_top));
-                y_top += *height as i32 + BUBBLE_GAP as i32;
+                y_top += *height as i32 + bg;
             }
         }
     }
 }
 
-/// Calculate X position: center bubble relative to pet, clamped to screen.
-fn center_bubble_x(pet_x: i32, pet_size: u32, screen_w: u32) -> i32 {
+fn center_bubble_x(pet_x: i32, pet_size: u32, screen_w: u32, bw: i32, bm: i32) -> i32 {
     let center = pet_x + pet_size as i32 / 2;
-    let x = center - BUBBLE_WIDTH as i32 / 2;
-    x.max(BUBBLE_MARGIN as i32).min(screen_w as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32)
+    let x = center - bw / 2;
+    x.max(bm).min(screen_w as i32 - bw - bm)
 }
 
-/// Get pet window position and size as bubble anchor point.
 fn get_pet_anchor(app: &AppHandle) -> (i32, i32, u32) {
     if let Some(bounds) = crate::windows::get_pet_bounds(app) {
         (bounds.x, bounds.y, bounds.height)
     } else {
-        // Fallback: bottom-right corner
         let (sw, sh) = get_work_area(app);
-        (sw as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32, sh as i32 - 200, 200)
+        let scale = get_scale(app);
+        let bw = scaled(BUBBLE_WIDTH, scale);
+        let bm = scaled(BUBBLE_MARGIN, scale);
+        (sw as i32 - bw - bm, sh as i32 - 200, 200)
     }
 }
 
-/// Calculate bubble position for a given index in the stack (used by tests).
 #[cfg(test)]
 pub fn bubble_position_for_index(screen_w: u32, screen_h: u32, index: u32, bubble_height: u32) -> (u32, u32) {
     let x = screen_w.saturating_sub(BUBBLE_WIDTH + BUBBLE_MARGIN);
@@ -152,26 +154,38 @@ pub fn bubble_position_for_index(screen_w: u32, screen_h: u32, index: u32, bubbl
 }
 
 fn initial_bubble_position(app: &AppHandle, bubbles: &BubbleMap) -> (u32, u32) {
-    let (screen_w, _screen_h) = get_work_area(app);
+    let scale = get_scale(app);
+    let bg = scaled(BUBBLE_GAP, scale);
+    let bw = scaled(BUBBLE_WIDTH, scale);
+    let bm = scaled(BUBBLE_MARGIN, scale);
+    let (screen_w, _) = get_work_area(app);
     let (pet_x, pet_y, pet_h) = get_pet_anchor(app);
-    let count = bubbles.lock_or_recover().len() as u32;
-    let x = center_bubble_x(pet_x, pet_h, screen_w);
-    let y = pet_y - (count as i32 + 1) * (200 + BUBBLE_GAP as i32);
+    let count = bubbles.lock_or_recover().len() as i32;
+    let x = center_bubble_x(pet_x, pet_h, screen_w, bw, bm);
+    let y = pet_y - (count + 1) * (scaled(200, scale) + bg);
     (x.max(0) as u32, y.max(0) as u32)
 }
 
 fn get_work_area(app: &AppHandle) -> (u32, u32) {
-    // Prefer monitor containing the pet window
     if let Some(pet) = app.get_webview_window("pet") {
         if let Ok(Some(monitor)) = pet.current_monitor() {
             return (monitor.size().width, monitor.size().height);
         }
     }
-    // Fallback to primary monitor
     app.primary_monitor()
         .ok().flatten()
         .map(|m| (m.size().width, m.size().height))
         .unwrap_or(crate::prefs::DEFAULT_SCREEN_SIZE)
+}
+
+fn get_scale(app: &AppHandle) -> f64 {
+    app.get_webview_window("pet")
+        .and_then(|p| p.scale_factor().ok())
+        .unwrap_or(1.0)
+}
+
+fn scaled(logical: u32, scale: f64) -> i32 {
+    (logical as f64 * scale).round() as i32
 }
 
 #[tauri::command]

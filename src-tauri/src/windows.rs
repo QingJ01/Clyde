@@ -94,33 +94,26 @@ pub fn get_pet_bounds(app: &AppHandle) -> Option<WindowBounds> {
 
 /// Get the monitor the pet window is currently on.
 /// Falls back to primary monitor, then to default screen size.
-/// Get the monitor the pet is on, in **logical coordinates** (DPI-adjusted).
-/// This matches screenX/screenY from the browser and LogicalPosition for set_position.
+/// Get the monitor the pet is on, in **physical pixels**.
+/// Matches get_pet_bounds(), outer_position(), cursor_position(), etc.
+/// Only drag_move needs logical coords — it converts separately.
 pub fn get_pet_monitor(app: &AppHandle) -> MonitorBounds {
-    // Try the monitor the pet is actually on
     if let Some(pet) = app.get_webview_window("pet") {
         if let Ok(Some(monitor)) = pet.current_monitor() {
-            let scale = monitor.scale_factor();
             let pos = monitor.position();
             let size = monitor.size();
             return MonitorBounds {
-                x: (pos.x as f64 / scale).round() as i32,
-                y: (pos.y as f64 / scale).round() as i32,
-                width: (size.width as f64 / scale).round() as u32,
-                height: (size.height as f64 / scale).round() as u32,
+                x: pos.x, y: pos.y,
+                width: size.width, height: size.height,
             };
         }
     }
-    // Fallback to primary
     if let Some(monitor) = app.primary_monitor().ok().flatten() {
-        let scale = monitor.scale_factor();
         let pos = monitor.position();
         let size = monitor.size();
         return MonitorBounds {
-            x: (pos.x as f64 / scale).round() as i32,
-            y: (pos.y as f64 / scale).round() as i32,
-            width: (size.width as f64 / scale).round() as u32,
-            height: (size.height as f64 / scale).round() as u32,
+            x: pos.x, y: pos.y,
+            width: size.width, height: size.height,
         };
     }
     MonitorBounds { x: 0, y: 0, width: 1920, height: 1080 }
