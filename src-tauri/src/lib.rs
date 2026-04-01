@@ -554,6 +554,11 @@ fn setup_pet_window(app: &AppHandle, prefs: &prefs::Prefs) {
 
 fn setup_hit_window(app: &AppHandle) {
     if let Some(hit) = app.get_webview_window("hit") {
+        // macOS needs a near-transparent background (not fully transparent)
+        // to receive pointer events. Windows/Linux work with fully transparent.
+        #[cfg(target_os = "macos")]
+        let _ = hit.set_background_color(Some(Color(0, 0, 0, 1)));
+        #[cfg(not(target_os = "macos"))]
         let _ = hit.set_background_color(Some(Color(0, 0, 0, 0)));
     }
     if let Some(bounds) = windows::get_pet_bounds(app) {
