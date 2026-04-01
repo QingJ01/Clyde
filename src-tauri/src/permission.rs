@@ -40,12 +40,16 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
     let label = format!("bubble-{}", id);
     let url = format!("src/windows/bubble/index.html?entry_id={id}");
 
-    let (x, y) = initial_bubble_position(app, bubbles);
+    let (x_phys, y_phys) = initial_bubble_position(app, bubbles);
+    let scale = get_scale(app);
+    // .position() and .inner_size() take logical coordinates
+    let x_log = x_phys as f64 / scale;
+    let y_log = y_phys as f64 / scale;
 
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("")
         .inner_size(BUBBLE_WIDTH as f64, 200.0)
-        .position(x as f64, y as f64)
+        .position(x_log, y_log)
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
