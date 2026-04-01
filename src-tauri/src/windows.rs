@@ -31,6 +31,9 @@ pub struct HitRect {
 
 impl HitBox {
     pub const DEFAULT:  HitBox = HitBox { x: -1, y: 5,  w: 17, h: 12 };
+    // A generous interaction area so dragging works across the full pet,
+    // not just the sprite's narrow torso hotspot.
+    pub const INTERACTIVE: HitBox = HitBox { x: -10, y: -16, w: 35, h: 35 };
     #[allow(dead_code)]
     pub const SLEEPING: HitBox = HitBox { x: -2, y: 9,  w: 19, h: 7  };
     #[allow(dead_code)]
@@ -126,5 +129,15 @@ mod tests {
             (wide_rect.right - wide_rect.left) > (default_rect.right - default_rect.left),
             "WIDE hitbox should produce wider rect"
         );
+    }
+
+    #[test]
+    fn test_interactive_hitbox_covers_most_of_pet_window() {
+        let bounds = WindowBounds { x: 0, y: 0, width: 200, height: 200 };
+        let rect = compute_hit_rect(&bounds, &HitBox::INTERACTIVE);
+        assert!(rect.left <= 5.0, "interactive hit area should start near left edge");
+        assert!(rect.top <= 5.0, "interactive hit area should start near top edge");
+        assert!(rect.right >= 195.0, "interactive hit area should reach near right edge");
+        assert!(rect.bottom >= 195.0, "interactive hit area should reach near bottom edge");
     }
 }

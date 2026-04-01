@@ -102,7 +102,7 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     }
     // Construct updated bounds from the new position + known size (avoid second IPC query)
     let updated = windows::WindowBounds { x: new_x, y: new_y, width: pet_w, height: pet_h };
-    windows::sync_hit_window(&app, &updated, &windows::HitBox::DEFAULT);
+    windows::sync_hit_window(&app, &updated, &windows::HitBox::INTERACTIVE);
 }
 
 #[tauri::command]
@@ -353,7 +353,7 @@ fn is_left_mini(app: &AppHandle) -> bool {
 
 pub(crate) fn sync_hit(app: &AppHandle) {
     if let Some(bounds) = windows::get_pet_bounds(app) {
-        windows::sync_hit_window(app, &bounds, &windows::HitBox::DEFAULT);
+        windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
     }
 }
 
@@ -526,7 +526,7 @@ fn setup_hit_window(app: &AppHandle) {
         let _ = hit.set_background_color(Some(Color(0, 0, 0, 0)));
     }
     if let Some(bounds) = windows::get_pet_bounds(app) {
-        windows::sync_hit_window(app, &bounds, &windows::HitBox::DEFAULT);
+        windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
         windows::show_hit_window(app);
         println!("Clyde: hit window synced to pet bounds");
     } else {

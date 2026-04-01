@@ -65,7 +65,7 @@ fn apply_size(app: &AppHandle, size_str: &str) {
         let (w, h) = prefs::size_to_pixels(size_str);
         let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
         if let Some(bounds) = windows::get_pet_bounds(app) {
-            windows::sync_hit_window(app, &bounds, &windows::HitBox::DEFAULT);
+            windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
         }
     }
     if let Some(prefs_state) = app.try_state::<SharedPrefs>() {
