@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.1.2 — Multi-Monitor & macOS Fix
+
+### Multi-Monitor Support
+
+- Pet can now be dragged freely across all monitors (no longer clamped to primary screen)
+- Edge snap detection uses current monitor bounds — works correctly on secondary monitors and monitors with negative coordinates (e.g. left-side displays)
+- Mini mode hides behind the correct monitor edge, no more residual rendering on adjacent screens
+- Hit window clamped to current monitor bounds
+
+### Snap Preview
+
+- Dragging pet into the edge snap zone (30px) now shows a visual preview: pet scales to 70% + 60% opacity
+- Smooth 150ms ease-out transition in and out of the preview
+- Preview clears immediately on drag release
+
+### macOS Fixes (PR [#2](https://github.com/QingJ01/Clyde/pull/2) by [@kinoko-shelter](https://github.com/kinoko-shelter))
+
+- Enable Tauri macOS private API for proper transparent window rendering
+- Expand interactive hit area (`HitBox::INTERACTIVE`) so dragging works reliably across the full pet window
+- Give hit window a near-transparent background (`rgba(0,0,0,0.01)`) to receive pointer events on macOS
+- CI: ad-hoc code signing (`APPLE_SIGNING_IDENTITY='-'`) so Apple Silicon Macs can run without manual `codesign`
+
+### Other
+
+- Updated Troubleshooting docs: macOS "App is damaged" fix now includes `codesign --force --deep --sign -` for Apple Silicon
+- Removed legacy Electron `build.yml` workflow
+
+---
+
 ## v0.1.1 — Hook Format Fix
 
 ### Breaking Fix

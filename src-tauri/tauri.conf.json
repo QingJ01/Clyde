@@ -1,6 +1,6 @@
 {
   "productName": "Clyde on Desk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.clyde.on-desk",
   "build": {
     "beforeDevCommand": "npm run dev",
