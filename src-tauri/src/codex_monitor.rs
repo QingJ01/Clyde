@@ -15,92 +15,104 @@ pub fn start_codex_monitor(app: AppHandle, state: SharedState) {
     let _ = std::thread::Builder::new()
         .name("codex-monitor".into())
         .spawn(move || {
-            let codex_dir = match dirs::home_dir() {
-                Some(h) => h.join(".codex").join("sessions"),
-                None => return,
-            };
+            let codex_roots = codex_session_roots();
+            if codex_roots.is_empty() { return; }
             let mut known_files: HashMap<PathBuf, u64> = HashMap::new();
-            println!("Clyde: codex monitor started, watching {}", codex_dir.display());
+            let watched = codex_roots.iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("Clyde: codex monitor started, watching {watched}");
 
             loop {
                 std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
-                if !codex_dir.exists() { continue; }
-
-                // Scan nested date directories: sessions/YYYY/MM/DD/*.jsonl
-                let jsonl_files = find_codex_jsonl_files(&codex_dir);
-
-                for path in jsonl_files {
-
-                    let file = match std::fs::File::open(&path) {
-                        Ok(f) => f,
-                        Err(_) => continue,
-                    };
-                    let file_len = match file.metadata() {
-                        Ok(m) => m.len(),
-                        Err(_) => continue,
-                    };
-                    // Detect file truncation/rotation: if file shrank, restart from beginning
-                    let stored_offset = known_files.get(&path).copied();
-                    let first_time = stored_offset.is_none();
-                    let offset = match stored_offset {
-                        Some(prev) if file_len < prev => 0, // file truncated, restart
-                        Some(prev) => prev,
-                        None => 0, // First time: read from start to detect current state
-                    };
-                    if file_len <= offset {
-                        known_files.insert(path.clone(), file_len);
-                        continue;
-                    }
-
-                    let mut reader = BufReader::new(file);
-                    if reader.seek(SeekFrom::Start(offset)).is_err() { continue; }
-                    let mut new_content = String::new();
-                    if reader.read_to_string(&mut new_content).is_err() { continue; }
-                    let new_offset = file_len;
-                    known_files.insert(path.clone(), new_offset);
-
-                    let session_id = format!("codex-{}", path.file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("unknown"));
-
-                    if first_time {
-                        // First time seeing this file: only apply the last known state
-                        // (avoids replaying entire session history as rapid state changes)
-                        let mut last_state: Option<&str> = None;
-                        let mut ended = false;
-                        for line in new_content.lines() {
-                            if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
-                                if is_codex_session_end(&event) { ended = true; }
-                                if let Some(s) = map_codex_event(&event) { last_state = Some(s); }
-                            }
-                        }
-                        if !ended {
-                            if let Some(state_str) = last_state {
-                                codex_update_and_emit(&app, &state, &session_id, state_str, "monitor");
-                            }
-                        }
-                    } else {
-                        // Incremental: process each new line
-                        for line in new_content.lines() {
-                            if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
-                                if is_codex_session_end(&event) {
-                                    codex_update_and_emit(&app, &state, &session_id, "idle", "SessionEnd");
-                                    continue;
-                                }
-
-                                let event_type = event["type"].as_str().unwrap_or("");
-                                if let Some(state_str) = map_codex_event(&event) {
-                                    codex_update_and_emit(&app, &state, &session_id, state_str, event_type);
-                                }
-                            }
-                        }
-                    }
+                for codex_dir in &codex_roots {
+                    scan_codex_root(&app, &state, &mut known_files, codex_dir);
                 }
 
                 // Clean up entries for files that no longer exist
                 known_files.retain(|path, _| path.exists());
             }
         });
+}
+
+fn scan_codex_root(
+    app: &AppHandle,
+    state: &SharedState,
+    known_files: &mut HashMap<PathBuf, u64>,
+    codex_dir: &std::path::Path,
+) {
+    if !codex_dir.exists() { return; }
+
+    // Scan nested date directories: sessions/YYYY/MM/DD/*.jsonl
+    let jsonl_files = find_codex_jsonl_files(codex_dir);
+
+    for path in jsonl_files {
+        let file = match std::fs::File::open(&path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let file_len = match file.metadata() {
+            Ok(m) => m.len(),
+            Err(_) => continue,
+        };
+        // Detect file truncation/rotation: if file shrank, restart from beginning
+        let stored_offset = known_files.get(&path).copied();
+        let first_time = stored_offset.is_none();
+        let offset = match stored_offset {
+            Some(prev) if file_len < prev => 0, // file truncated, restart
+            Some(prev) => prev,
+            None => 0, // First time: read from start to detect current state
+        };
+        if file_len <= offset {
+            known_files.insert(path.clone(), file_len);
+            continue;
+        }
+
+        let mut reader = BufReader::new(file);
+        if reader.seek(SeekFrom::Start(offset)).is_err() { continue; }
+        let mut new_content = String::new();
+        if reader.read_to_string(&mut new_content).is_err() { continue; }
+        let new_offset = file_len;
+        known_files.insert(path.clone(), new_offset);
+
+        let session_id = format!("codex-{}", path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown"));
+
+        if first_time {
+            // First time seeing this file: only apply the last known state
+            // (avoids replaying entire session history as rapid state changes)
+            let mut last_state: Option<&str> = None;
+            let mut ended = false;
+            for line in new_content.lines() {
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
+                    if is_codex_session_end(&event) { ended = true; }
+                    if let Some(s) = map_codex_event(&event) { last_state = Some(s); }
+                }
+            }
+            if !ended {
+                if let Some(state_str) = last_state {
+                    codex_update_and_emit(app, state, &session_id, state_str, "monitor");
+                }
+            }
+        } else {
+            // Incremental: process each new line
+            for line in new_content.lines() {
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
+                    if is_codex_session_end(&event) {
+                        codex_update_and_emit(app, state, &session_id, "idle", "SessionEnd");
+                        continue;
+                    }
+
+                    let event_type = event["type"].as_str().unwrap_or("");
+                    if let Some(state_str) = map_codex_event(&event) {
+                        codex_update_and_emit(app, state, &session_id, state_str, event_type);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Update state machine and emit — same as `update_session_and_emit` but
@@ -182,6 +194,113 @@ fn is_codex_session_end(event: &serde_json::Value) -> bool {
             event["payload"]["type"].as_str(),
             Some("task_complete") | Some("task_cancelled")
         )
+}
+
+fn codex_session_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".codex").join("sessions"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        roots.extend(wsl_codex_roots());
+    }
+    dedup_paths(roots)
+}
+
+fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut unique = Vec::new();
+    for path in paths {
+        if !unique.iter().any(|existing| existing == &path) {
+            unique.push(path);
+        }
+    }
+    unique
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_codex_roots() -> Vec<PathBuf> {
+    let output = match std::process::Command::new("wsl.exe").args(["-l", "-q"]).output() {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+
+    let mut roots = Vec::new();
+    for distro in parse_wsl_distros(&output.stdout) {
+        roots.extend(build_wsl_codex_roots_for_distro(&distro));
+    }
+    dedup_paths(roots)
+}
+
+#[cfg(target_os = "windows")]
+fn build_wsl_codex_roots_for_distro(distro: &str) -> Vec<PathBuf> {
+    let output = match std::process::Command::new("wsl.exe")
+        .args(["-d", distro, "--", "sh", "-lc", "printf %s \"$HOME\""])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+    let home = decode_wsl_stdout(&output.stdout);
+    wsl_unc_codex_paths(distro, home.trim())
+}
+
+fn wsl_unc_codex_paths(distro: &str, home: &str) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(path) = build_wsl_unc_codex_path("wsl$", distro, home) {
+        roots.push(path);
+    }
+    if let Some(path) = build_wsl_unc_codex_path("wsl.localhost", distro, home) {
+        roots.push(path);
+    }
+    dedup_paths(roots)
+}
+
+fn build_wsl_unc_codex_path(host: &str, distro: &str, home: &str) -> Option<PathBuf> {
+    let trimmed_host = host.trim();
+    if trimmed_host.is_empty() {
+        return None;
+    }
+    let suffix = wsl_unc_home_suffix(distro, home)?;
+    Some(PathBuf::from(format!(r"\\{}\{}", trimmed_host, suffix)))
+}
+
+fn wsl_unc_home_suffix(distro: &str, home: &str) -> Option<String> {
+    let trimmed_distro = distro.trim();
+    let trimmed_home = home.trim();
+    if trimmed_distro.is_empty() || trimmed_home.is_empty() || !trimmed_home.starts_with('/') {
+        return None;
+    }
+
+    let mut suffix = String::from(trimmed_distro);
+    suffix.push('\\');
+    suffix.push_str(trimmed_home.trim_start_matches('/').replace('/', "\\").as_str());
+    suffix.push_str(r"\.codex\sessions");
+    Some(suffix)
+}
+
+fn parse_wsl_distros(stdout: &[u8]) -> Vec<String> {
+    decode_wsl_stdout(stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.trim_start_matches('*').trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+fn decode_wsl_stdout(stdout: &[u8]) -> String {
+    if stdout.len() >= 2
+        && stdout.len() % 2 == 0
+        && stdout.iter().skip(1).step_by(2).all(|&b| b == 0)
+    {
+        let utf16: Vec<u16> = stdout
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        return String::from_utf16_lossy(&utf16);
+    }
+    String::from_utf8_lossy(stdout).into_owned()
 }
 
 /// Maximum age (seconds) for a session file to be considered active.
