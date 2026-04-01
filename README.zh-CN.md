@@ -144,6 +144,16 @@ assets/svg/              35 个动画帧
 
 ## 故障排除
 
+### macOS: 提示"应用已损坏，无法打开"
+
+这是 macOS Gatekeeper 拦截未签名应用，并非真的损坏。修复方法：
+
+```bash
+xattr -cr "/Applications/Clyde on Desk.app"
+```
+
+或进入 **系统设置 → 隐私与安全性**，点击 **仍要打开**。
+
 ### 权限气泡不弹出
 
 如果 Claude Code 请求工具权限时 Clyde 没有弹出审批卡片：

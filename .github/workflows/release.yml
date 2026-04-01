@@ -58,7 +58,10 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: '${{ github.ref_name }} — Clyde on Desk'
-          releaseBody: 'See [CHANGELOG.md](https://github.com/QingJ01/Clyde/blob/main/CHANGELOG.md) for details.'
+          releaseBody: |
+            See [CHANGELOG.md](https://github.com/QingJ01/Clyde/blob/main/CHANGELOG.md) for details.
+
+            **macOS users**: If you see "App is damaged", run: `xattr -cr "/Applications/Clyde on Desk.app"`
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}

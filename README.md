@@ -144,6 +144,16 @@ assets/svg/              35 animation frames
 
 ## Troubleshooting
 
+### macOS: "App is damaged and can't be opened"
+
+This is macOS Gatekeeper blocking unsigned apps — the app is not actually damaged. Fix:
+
+```bash
+xattr -cr "/Applications/Clyde on Desk.app"
+```
+
+Or go to **System Settings → Privacy & Security** and click **Open Anyway**.
+
 ### Permission bubbles not appearing
 
 If Clyde's permission approval bubbles don't show when Claude Code requests tool permissions:
