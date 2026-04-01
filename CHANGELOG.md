@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.1.1 — Hook Format Fix
+
+### Breaking Fix
+
+- **All hooks now use nested `{matcher, hooks[]}` format** — Claude Code silently ignored the old flat `{type, command}` format. This was the root cause of hooks not firing for many users. Clyde now registers all 13 event hooks + PermissionRequest in the correct nested format, and auto-cleans old flat entries on startup.
+
+### Improvements
+
+- Context menu: sessions submenu with emoji status icons, size/language checkmarks, About button
+- Bubble positioning: anchored to pet window instead of fixed screen corner, stacks above (or below if no room)
+- Permission mode tracker: real-time awareness of Claude's permission mode with mode change notifications
+- Codex monitor: scan nested date directories, correct event mapping, 1-hour file age filter, proper `agent_id = "Codex"` tagging
+- Eye tracking: 80ms CSS ease-out transition for smooth cursor following
+- Hit window: keyboard accessibility (Enter/Space), aria-labels, explicit pointer capture release
+- Peek detection: symmetric 10px zone (was 30/10 asymmetric)
+- Auto-focus: only steal focus on `attention` (task complete), not `notification`
+- Mutex safety: `MutexExt::lock_or_recover()` replaces 50+ `.expect()` calls — prevents panic cascades
+- `run()` split into `setup_pet_window`, `setup_hit_window`, `setup_tray`, `start_cleanup_loop`
+- Animation duration constants, default size/screen constants centralized
+- Hook installer: precise regex matching for flat hook cleanup, separate migration log, 9 JS tests
+- macOS: conditional `transparent()`/`shadow()` with `#[cfg(not(target_os = "macos"))]`
+- Web: official site with auto language detection, brand logos, mobile hamburger menu, friend links
+
+### Bug Fixes
+
+- Fix hooks not firing due to flat format (community report from LINUX DO)
+- Fix DND mode not blocking permission bubbles
+- Fix language menu missing current selection checkmark
+- Fix right-click locking drag state (`e.button !== 0` filter)
+- Remove legacy Electron `build.yml` workflow that conflicted with Tauri release
+- Remove leftover upstream files (docs/, scripts/, extensions/)
+
+---
+
 ## v0.1.0 — Initial Release
 
 The first release of Clyde on Desk, a Tauri v2 rewrite of the original [Clawd on Desk](https://github.com/rullerzhou-afk/clawd-on-desk) project.
