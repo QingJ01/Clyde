@@ -49,18 +49,19 @@ const DRAG_THRESHOLD: f64 = 3.0;
 #[tauri::command]
 fn drag_start(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     let mut d = drag.lock_or_recover();
-    // Always set active so drag_end runs (for click detection, sync_hit, etc.).
-    // If pet bounds are unavailable (rare, e.g. during animation), use last known or 0,0.
     d.active        = true;
     d.dragging      = false;
+    // Frontend sends logical screenX/Y — store as-is (logical coords)
     d.start_mouse_x = x;
     d.start_mouse_y = y;
-    if let Some(bounds) = windows::get_pet_bounds(&app) {
-        d.start_win_x = bounds.x;
-        d.start_win_y = bounds.y;
+    // Window position in logical coords to match mouse coords
+    if let Some(pet) = app.get_webview_window("pet") {
+        if let Ok(pos) = pet.outer_position() {
+            let scale = pet.scale_factor().unwrap_or(1.0);
+            d.start_win_x = (pos.x as f64 / scale).round() as i32;
+            d.start_win_y = (pos.y as f64 / scale).round() as i32;
+        }
     }
-    // If bounds unavailable, keep previous start_win_x/y — drag_move will still work
-    // relative to wherever the pet was last known to be.
 }
 
 #[tauri::command]
@@ -83,32 +84,39 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     let mut new_x = base_x + dx as i32;
     let mut new_y = base_y + dy as i32;
 
-    // Query pet bounds once for both clamp and hit-window sync
-    let bounds = windows::get_pet_bounds(&app);
-    let pet_w = bounds.as_ref().map(|b| b.width).unwrap_or(prefs::DEFAULT_PET_DIMENSION);
-    let pet_h = bounds.as_ref().map(|b| b.height).unwrap_or(prefs::DEFAULT_PET_DIMENSION);
-
-    // Clamp to current monitor bounds: keep at least 30px visible
+    // All drag math uses logical pixels (matching frontend screenX/screenY).
+    // get_pet_monitor() returns logical bounds so clamp is consistent.
     let mon = windows::get_pet_monitor(&app);
+    let scale = app.get_webview_window("pet")
+        .and_then(|p| p.scale_factor().ok()).unwrap_or(1.0);
+    let pet_size = app.get_webview_window("pet")
+        .and_then(|p| p.outer_size().ok()).unwrap_or_default();
+    let pet_w_log = (pet_size.width as f64 / scale).round() as i32;
+
     const MIN_VISIBLE: i32 = 30;
-    new_x = new_x.max(mon.x + MIN_VISIBLE - pet_w as i32).min(mon.x + mon.width as i32 - MIN_VISIBLE);
+    new_x = new_x.max(mon.x + MIN_VISIBLE - pet_w_log).min(mon.x + mon.width as i32 - MIN_VISIBLE);
     new_y = new_y.max(mon.y).min(mon.y + mon.height as i32 - MIN_VISIBLE);
 
+    // Convert logical → physical for set_position
     if let Some(pet) = app.get_webview_window("pet") {
-        let _ = pet.set_position(PhysicalPosition::new(new_x, new_y));
+        let _ = pet.set_position(PhysicalPosition::new(
+            (new_x as f64 * scale).round() as i32,
+            (new_y as f64 * scale).round() as i32,
+        ));
     }
 
-    // Snap preview: check if we're near an edge and show visual feedback
-    let updated = windows::WindowBounds { x: new_x, y: new_y, width: pet_w, height: pet_h };
+    // Snap preview (logical coords)
     let near_edge = {
-        let mon_left = mon.x;
         let mon_right = mon.x + mon.width as i32;
-        let pet_right = new_x + pet_w as i32;
-        (mon_right - pet_right <= mini::SNAP_TOLERANCE) || (new_x - mon_left <= mini::SNAP_TOLERANCE)
+        let pet_right = new_x + pet_w_log;
+        (mon_right - pet_right <= mini::SNAP_TOLERANCE) || (new_x - mon.x <= mini::SNAP_TOLERANCE)
     };
     let _ = app.emit("snap-preview", serde_json::json!({ "active": near_edge }));
 
-    windows::sync_hit_window(&app, &updated, &windows::HitBox::INTERACTIVE);
+    // Sync hit window with physical coordinates
+    if let Some(bounds) = windows::get_pet_bounds(&app) {
+        windows::sync_hit_window(&app, &bounds, &windows::HitBox::INTERACTIVE);
+    }
 }
 
 #[tauri::command]

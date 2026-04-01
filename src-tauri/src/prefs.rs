@@ -20,8 +20,6 @@ pub struct Prefs {
     #[serde(default)] pub bubble_follow_pet: bool,
 }
 
-/// Default pet dimension (pixels) when bounds are unavailable.
-pub const DEFAULT_PET_DIMENSION: u32 = 200;
 /// Default screen size fallback when monitor info is unavailable.
 pub const DEFAULT_SCREEN_SIZE: (u32, u32) = (1920, 1080);
 

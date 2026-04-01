@@ -7,14 +7,12 @@
   let clickCount = 0;
   let clickTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function toPhys(v: number) { return Math.round(v * window.devicePixelRatio); }
-
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return; // Only handle left click — right click goes to onContextMenu
     (e.target as Element).setPointerCapture(e.pointerId);
     isDragging = false;
-    startX = toPhys(e.screenX);
-    startY = toPhys(e.screenY);
+    startX = e.screenX;
+    startY = e.screenY;
     invoke('drag_start', { x: startX, y: startY });
 
     clickCount++;
@@ -33,11 +31,11 @@
     if (e.buttons === 0) return;
     // Mark as dragging after a few pixels of movement (matches Rust-side threshold)
     if (!isDragging) {
-      const dx = toPhys(e.screenX) - startX;
-      const dy = toPhys(e.screenY) - startY;
+      const dx = e.screenX - startX;
+      const dy = e.screenY - startY;
       if (Math.sqrt(dx * dx + dy * dy) >= 3) isDragging = true;
     }
-    invoke('drag_move', { x: toPhys(e.screenX), y: toPhys(e.screenY) });
+    invoke('drag_move', { x: e.screenX, y: e.screenY });
   }
 
   function onPointerUp(e: PointerEvent) {
