@@ -62,10 +62,12 @@ pub fn rebuild_menu(app: &AppHandle, lang: &str) {
 pub fn apply_size_pub(app: &AppHandle, size_str: &str) { apply_size(app, size_str); }
 fn apply_size(app: &AppHandle, size_str: &str) {
     if let Some(pet) = app.get_webview_window("pet") {
+        let current_bounds = windows::get_pet_bounds(app);
         let (w, h) = prefs::size_to_pixels(size_str);
         let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
-        if let Some(bounds) = windows::get_pet_bounds(app) {
-            windows::sync_hit_window(app, &bounds, &windows::HitBox::DEFAULT);
+        if let Some(current) = current_bounds {
+            let updated = windows::resized_pet_bounds(&current, w, h);
+            windows::sync_hit_window(app, &updated, &windows::HitBox::DEFAULT);
         }
     }
     if let Some(prefs_state) = app.try_state::<SharedPrefs>() {

@@ -450,9 +450,13 @@ fn trigger_wake(app: AppHandle, state: tauri::State<'_, SharedState>, abort_hand
 #[tauri::command]
 fn set_window_size(app: AppHandle, size: String, prefs: tauri::State<SharedPrefs>) {
     if let Some(pet) = app.get_webview_window("pet") {
+        let current_bounds = windows::get_pet_bounds(&app);
         let (w, h) = prefs::size_to_pixels(&size);
         let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
-        sync_hit(&app);
+        if let Some(current) = current_bounds {
+            let updated = windows::resized_pet_bounds(&current, w, h);
+            windows::sync_hit_window(&app, &updated, &windows::HitBox::DEFAULT);
+        }
         let mut p = prefs.lock_or_recover();
         p.size = size;
         prefs::save(&app, &p);
@@ -521,17 +525,14 @@ fn setup_pet_window(app: &AppHandle, prefs: &prefs::Prefs) {
     pet.open_devtools();
 }
 
-fn setup_hit_window(app: &AppHandle) {
+fn setup_hit_window(app: &AppHandle, prefs: &prefs::Prefs) {
     if let Some(hit) = app.get_webview_window("hit") {
         let _ = hit.set_background_color(Some(Color(0, 0, 0, 0)));
     }
-    if let Some(bounds) = windows::get_pet_bounds(app) {
-        windows::sync_hit_window(app, &bounds, &windows::HitBox::DEFAULT);
-        windows::show_hit_window(app);
-        println!("Clyde: hit window synced to pet bounds");
-    } else {
-        eprintln!("Clyde: could not get pet bounds for hit window sync");
-    }
+    let bounds = windows::startup_pet_bounds(prefs);
+    windows::sync_hit_window(app, &bounds, &windows::HitBox::DEFAULT);
+    windows::show_hit_window(app);
+    println!("Clyde: hit window synced to startup bounds");
 }
 
 fn setup_tray(app: &AppHandle, prefs: &prefs::Prefs, shared_tray: &tray::SharedTray) {
@@ -605,7 +606,7 @@ pub fn run() {
             *shared_prefs.lock_or_recover() = prefs.clone();
 
             setup_pet_window(app.handle(), &prefs);
-            setup_hit_window(app.handle());
+            setup_hit_window(app.handle(), &prefs);
             setup_tray(app.handle(), &prefs, &shared_tray);
 
             // Save position on close
