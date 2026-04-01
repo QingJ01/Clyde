@@ -69,7 +69,7 @@ section { padding: var(--section-py) 0; }
 }
 .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.05rem; color: var(--text); }
 .logo img { border-radius: 6px; }
-#main-nav { display: flex; align-items: center; gap: 28px; }
+#main-nav { display: flex; align-items: center; gap: 28px; margin-left: 40px; }
 #main-nav a { color: var(--text-2); font-size: .9rem; font-weight: 500; transition: color .2s; }
 #main-nav a:hover { color: var(--text); }
 #lang-toggle {
