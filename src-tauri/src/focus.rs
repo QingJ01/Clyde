@@ -84,8 +84,18 @@ pub fn focus_window_by_pid(pid: u32, _cwd: &str) {
 }
 
 #[tauri::command]
-pub fn focus_terminal_for_session(pid: Option<u32>, cwd: Option<String>) {
-    if let Some(p) = pid {
-        focus_window_by_pid(p, cwd.as_deref().unwrap_or(""));
+pub fn focus_terminal_for_session(
+    app: tauri::AppHandle,
+    state: tauri::State<crate::state_machine::SharedState>,
+    session_id: String,
+) {
+    use crate::util::MutexExt;
+    let sm = state.lock_or_recover();
+    if let Some(entry) = sm.sessions.get(&session_id) {
+        if let Some(pid) = entry.source_pid {
+            let cwd = entry.cwd.clone();
+            drop(sm);
+            focus_window_by_pid(pid, &cwd);
+        }
     }
 }

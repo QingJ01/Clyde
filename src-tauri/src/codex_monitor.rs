@@ -3,6 +3,7 @@ use std::io::{Read, Seek, SeekFrom, BufReader};
 use std::path::PathBuf;
 use std::time::Duration;
 use tauri::AppHandle;
+use crate::util::MutexExt;
 use crate::state_machine::SharedState;
 
 const POLL_INTERVAL_MS: u64 = 1500;
@@ -120,7 +121,7 @@ fn scan_codex_root(
 /// "claude-code" label from `SessionEntry::new()`.
 fn codex_update_and_emit(app: &AppHandle, state: &SharedState, session_id: &str, state_str: &str, event: &str) {
     let (resolved, svg) = {
-        let mut sm = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut sm = state.lock_or_recover();
         if event == "SessionEnd" {
             sm.handle_session_end(session_id);
         } else {

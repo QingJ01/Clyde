@@ -80,8 +80,8 @@
   }
 
   async function dismiss() {
-    // Mode notice: just close the bubble (no permission decision needed)
-    try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().close(); } catch {}
+    // Mode notice: close bubble via Rust to properly clean up BubbleMap
+    await invoke('dismiss_bubble', { id });
   }
 </script>
 

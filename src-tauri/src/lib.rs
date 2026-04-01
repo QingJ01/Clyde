@@ -212,12 +212,11 @@ fn hit_flail(app: AppHandle) {
 fn show_context_menu(app: AppHandle, state: tauri::State<'_, SharedState>, prefs: tauri::State<SharedPrefs>) {
     use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
 
-    let lang = prefs.lock_or_recover().lang.clone();
-    let p = prefs.lock_or_recover();
+    let (lang, is_mini, cur_size) = {
+        let p = prefs.lock_or_recover();
+        (p.lang.clone(), p.mini_mode, p.size.clone())
+    };
     let is_dnd = state.lock_or_recover().dnd;
-    let is_mini = p.mini_mode;
-    let cur_size = p.size.clone();
-    drop(p);
 
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
 
@@ -595,9 +594,13 @@ fn start_cleanup_loop(app: &AppHandle, state: SharedState) {
             interval.tick().await;
             let changed = state_for_cleanup.lock_or_recover().clean_stale();
             if changed {
-                let sm = state_for_cleanup.lock_or_recover();
-                let resolved = sm.resolve_display_state();
-                let svg = sm.svg_for_state(&resolved);
+                let (resolved, svg) = {
+                    let sm = state_for_cleanup.lock_or_recover();
+                    let r = sm.resolve_display_state();
+                    let s = sm.svg_for_state(&r);
+                    (r, s)
+                };
+                // Lock dropped before emit_state to avoid holding state across prefs/mini locks
                 emit_state(&app_for_cleanup, &resolved, &svg);
             }
         }
@@ -638,6 +641,7 @@ pub fn run() {
             set_lang,
             permission::get_bubble_data,
             permission::bubble_height_measured,
+            permission::dismiss_bubble,
             focus::focus_terminal_for_session,
         ])
         .setup(move |app| {

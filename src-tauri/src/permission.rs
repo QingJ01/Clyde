@@ -103,7 +103,7 @@ pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
     let bg = scaled(BUBBLE_GAP, scale);
 
     let (screen_w, _) = get_work_area(app);
-    let (anchor_x, anchor_y, pet_h) = get_pet_anchor(app);
+    let (anchor_x, anchor_y, pet_w, pet_h) = get_pet_anchor(app);
 
     let total_h: i32 = entries.iter().map(|(_, h)| *h as i32 + bg).sum();
     let stack_above = anchor_y >= total_h + bm;
@@ -113,7 +113,7 @@ pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
         for (id, height) in &entries {
             let label = format!("bubble-{id}");
             if let Some(win) = app.get_webview_window(&label) {
-                let x = center_bubble_x(anchor_x, pet_h, screen_w, bw, bm);
+                let x = center_bubble_x(anchor_x, pet_w, screen_w, bw, bm);
                 let y = y_bottom - *height as i32 - bg;
                 let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
                 y_bottom = y;
@@ -124,7 +124,7 @@ pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
         for (id, height) in &entries {
             let label = format!("bubble-{id}");
             if let Some(win) = app.get_webview_window(&label) {
-                let x = center_bubble_x(anchor_x, pet_h, screen_w, bw, bm);
+                let x = center_bubble_x(anchor_x, pet_w, screen_w, bw, bm);
                 let _ = win.set_position(tauri::PhysicalPosition::new(x, y_top));
                 y_top += *height as i32 + bg;
             }
@@ -138,15 +138,16 @@ fn center_bubble_x(pet_x: i32, pet_size: u32, screen_w: u32, bw: i32, bm: i32) -
     x.max(bm).min(screen_w as i32 - bw - bm)
 }
 
-fn get_pet_anchor(app: &AppHandle) -> (i32, i32, u32) {
+/// Returns (x, y, width, height) of the pet window for bubble positioning.
+fn get_pet_anchor(app: &AppHandle) -> (i32, i32, u32, u32) {
     if let Some(bounds) = crate::windows::get_pet_bounds(app) {
-        (bounds.x, bounds.y, bounds.height)
+        (bounds.x, bounds.y, bounds.width, bounds.height)
     } else {
         let (sw, sh) = get_work_area(app);
         let scale = get_scale(app);
         let bw = scaled(BUBBLE_WIDTH, scale);
         let bm = scaled(BUBBLE_MARGIN, scale);
-        (sw as i32 - bw - bm, sh as i32 - 200, 200)
+        (sw as i32 - bw - bm, sh as i32 - 200, 200, 200)
     }
 }
 
@@ -163,9 +164,9 @@ fn initial_bubble_position(app: &AppHandle, bubbles: &BubbleMap) -> (u32, u32) {
     let bw = scaled(BUBBLE_WIDTH, scale);
     let bm = scaled(BUBBLE_MARGIN, scale);
     let (screen_w, _) = get_work_area(app);
-    let (pet_x, pet_y, pet_h) = get_pet_anchor(app);
+    let (pet_x, pet_y, pet_w, _pet_h) = get_pet_anchor(app);
     let count = bubbles.lock_or_recover().len() as i32;
-    let x = center_bubble_x(pet_x, pet_h, screen_w, bw, bm);
+    let x = center_bubble_x(pet_x, pet_w, screen_w, bw, bm);
     let y = pet_y - (count + 1) * (scaled(200, scale) + bg);
     (x.max(0) as u32, y.max(0) as u32)
 }
@@ -211,6 +212,16 @@ pub fn bubble_height_measured(
         entry.measured_height = height;
     }
     reposition_bubbles(&app, &bubbles);
+}
+
+/// Dismiss a bubble (used by ModeNotice OK button). Cleans up BubbleMap properly.
+#[tauri::command]
+pub fn dismiss_bubble(
+    app: AppHandle,
+    bubbles: tauri::State<BubbleMap>,
+    id: String,
+) {
+    close_bubble(&app, &bubbles, &id);
 }
 
 #[cfg(test)]
