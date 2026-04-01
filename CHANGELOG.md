@@ -5,7 +5,7 @@
 ### Bug Fixes
 
 - **"Go to Terminal" button was silently broken** — frontend passed `sessionId` but Rust expected `pid`/`cwd`, so the button did nothing. Now accepts `session_id` and does PID lookup server-side.
-- **Hit window not transparent on Windows** — PR #2's `rgba(0,0,0,0.01)` background (needed for macOS pointer events) rendered as opaque gray on Windows WebView2. Now uses `#[cfg(target_os)]` to apply near-transparent only on macOS.
+- **Hit window not transparent on Windows** — `rgba(0,0,0,0.01)` background (needed for macOS pointer events) rendered as opaque gray on Windows WebView2. Now uses `#[cfg(target_os)]` to apply near-transparent only on macOS.
 - **DPI coordinate mismatches (6 locations)** — `get_pet_monitor()` returned logical coords while everything else used physical, causing wrong snap detection, bubble positioning, and hit window clamp at DPI ≠ 100%. Unified to physical throughout; drag pipeline converts to logical only for clamp math.
 - **Pet couldn't be dragged to top 1/4 of screen** — frontend's `toPhys()` doubled the DPI scaling on `screenX/screenY`. Removed `toPhys`; drag pipeline now works in logical coords with explicit physical conversion at `set_position`.
 - **Cleanup loop held lock across emit_state** — latent deadlock risk. Now drops `SharedState` lock before calling `emit_state`.
@@ -21,6 +21,12 @@
 - **Position saved after every drag** — survives force-quit / task manager kill (previously only saved on `CloseRequested`)
 - **Bubble constants scaled by DPI** — `BUBBLE_WIDTH`, `BUBBLE_MARGIN`, `BUBBLE_GAP` multiplied by `scale_factor` for correct positioning on HiDPI displays
 - **Snap preview** — pet scales to 70% + 60% opacity when near screen edge during drag; 150ms ease-out transition
+- **WSL Codex session monitoring** (PR [#5](https://github.com/QingJ01/Clyde/pull/5) by [@Lane0218](https://github.com/Lane0218)) — detect and monitor Codex sessions running inside WSL
+
+### Closed Issues & PRs
+
+- Closes [#3](https://github.com/QingJ01/Clyde/issues/3) — macOS 下启动或切换尺寸后 hit window 与 pet window 错位 (by [@0xC3B6](https://github.com/0xC3B6))
+- Cherry-picked [#4](https://github.com/QingJ01/Clyde/pull/4) — fix: keep hit window aligned on startup and resize (by [@0xC3B6](https://github.com/0xC3B6))
 
 ---
 
