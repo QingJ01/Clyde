@@ -7,7 +7,7 @@ use crate::windows;
 use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem, Submenu},
-    tray::{TrayIcon, TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState},
+    tray::{TrayIcon, TrayIconBuilder},
     AppHandle, Emitter, Manager,
 };
 
@@ -235,7 +235,7 @@ pub fn build_tray(app: &AppHandle, lang: &str) -> tauri::Result<TrayIcon> {
             // On macOS, left-click opens the menu by default — avoid conflicting toggle.
             // On Windows/Linux, left-click toggles visibility (or disables click-through).
             #[cfg(not(target_os = "macos"))]
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+            if let tauri::tray::TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, button_state: tauri::tray::MouseButtonState::Up, .. } = event {
                 let app = tray.app_handle();
                 let is_click_through = app
                     .try_state::<SharedPrefs>()

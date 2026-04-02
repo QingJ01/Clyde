@@ -220,7 +220,7 @@ fn is_meeting_window(owner: &str, title: &str) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn monitor_rect(monitor: &MonitorArea) -> core_graphics::geometry::CGRect {
+fn monitor_rect(monitor: &crate::windows::MonitorArea) -> core_graphics::geometry::CGRect {
     use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 
     CGRect::new(
