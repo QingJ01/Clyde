@@ -1,30 +1,70 @@
+use crate::util::MutexExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
-use crate::util::MutexExt;
 
 pub type SharedPrefs = Arc<Mutex<Prefs>>;
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MonitorPlacement {
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub mini_side: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Prefs {
-    #[serde(default)] pub x: i32,
-    #[serde(default)] pub y: i32,
-    #[serde(default = "default_size")] pub size: String,
-    #[serde(default)] pub mini_mode: bool,
-    #[serde(default)] pub pre_mini_x: i32,
-    #[serde(default)] pub pre_mini_y: i32,
-    #[serde(default = "default_lang")] pub lang: String,
-    #[serde(default = "default_true")] pub show_tray: bool,
-    #[serde(default)] pub auto_start_with_claude: bool,
-    #[serde(default)] pub bubble_follow_pet: bool,
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default = "default_size")]
+    pub size: String,
+    #[serde(default)]
+    pub mini_mode: bool,
+    #[serde(default)]
+    pub pre_mini_x: i32,
+    #[serde(default)]
+    pub pre_mini_y: i32,
+    #[serde(default = "default_lang")]
+    pub lang: String,
+    #[serde(default = "default_true")]
+    pub show_tray: bool,
+    #[serde(default)]
+    pub auto_start_with_claude: bool,
+    #[serde(default)]
+    pub bubble_follow_pet: bool,
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub lock_position: bool,
+    #[serde(default)]
+    pub click_through: bool,
+    #[serde(default)]
+    pub auto_hide_fullscreen: bool,
+    #[serde(default)]
+    pub auto_dnd_meetings: bool,
+    #[serde(default)]
+    pub monitor_positions: HashMap<String, MonitorPlacement>,
 }
 
 /// Default screen size fallback when monitor info is unavailable.
 pub const DEFAULT_SCREEN_SIZE: (u32, u32) = (1920, 1080);
 
+/// Default pet window dimension (size "S").
+pub const DEFAULT_PET_DIMENSION: u32 = 200;
+
 pub fn size_to_pixels(size: &str) -> (u32, u32) {
-    match size { "M" => (280, 280), "L" => (360, 360), _ => (200, 200) }
+    match size {
+        "M" => (280, 280),
+        "L" => (360, 360),
+        _ => (200, 200),
+    }
 }
 
 /// Check if mini mode is currently active. Returns false if state is unavailable.
@@ -34,25 +74,54 @@ pub fn is_mini_mode(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-fn default_size() -> String { "S".into() }
-fn default_lang() -> String { "en".into() }
-fn default_true() -> bool   { true }
+fn default_size() -> String {
+    "S".into()
+}
+fn default_lang() -> String {
+    "en".into()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_opacity() -> f32 {
+    1.0
+}
+
+pub fn normalize_opacity(opacity: f32) -> f32 {
+    opacity.clamp(0.4, 1.0)
+}
 
 impl Default for Prefs {
     fn default() -> Self {
         Prefs {
-            x: 100, y: 100, size: "S".into(), mini_mode: false,
-            pre_mini_x: 0, pre_mini_y: 0, lang: "en".into(),
-            show_tray: true, auto_start_with_claude: false, bubble_follow_pet: false,
+            x: 100,
+            y: 100,
+            size: "S".into(),
+            mini_mode: false,
+            pre_mini_x: 0,
+            pre_mini_y: 0,
+            lang: "en".into(),
+            show_tray: true,
+            auto_start_with_claude: false,
+            bubble_follow_pet: false,
+            opacity: default_opacity(),
+            lock_position: false,
+            click_through: false,
+            auto_hide_fullscreen: false,
+            auto_dnd_meetings: false,
+            monitor_positions: HashMap::new(),
         }
     }
 }
 
 fn prefs_path(app: &AppHandle) -> PathBuf {
-    app.path().app_data_dir()
-        .unwrap_or_else(|_| dirs::home_dir()
-            .map(|h| h.join(".clyde"))
-            .unwrap_or_else(|| std::path::PathBuf::from(".clyde")))
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .map(|h| h.join(".clyde"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".clyde"))
+        })
         .join("clyde-prefs.json")
 }
 
@@ -62,7 +131,9 @@ pub fn load(app: &AppHandle) -> Prefs {
         Ok(r) => r,
         Err(_) => return Prefs::default(),
     };
-    serde_json::from_str(&raw).unwrap_or_default()
+    let mut prefs: Prefs = serde_json::from_str(&raw).unwrap_or_default();
+    prefs.opacity = normalize_opacity(prefs.opacity);
+    prefs
 }
 
 pub fn save(app: &AppHandle, prefs: &Prefs) {
@@ -72,11 +143,15 @@ pub fn save(app: &AppHandle, prefs: &Prefs) {
     }
     let json = match serde_json::to_string_pretty(prefs) {
         Ok(j) => j,
-        Err(e) => { eprintln!("Clyde: failed to serialize prefs: {e}"); return; }
+        Err(e) => {
+            eprintln!("Clyde: failed to serialize prefs: {e}");
+            return;
+        }
     };
     let tmp = path.with_extension("json.tmp");
     if let Err(e) = std::fs::write(&tmp, &json) {
-        eprintln!("Clyde: failed to write prefs tmp: {e}"); return;
+        eprintln!("Clyde: failed to write prefs tmp: {e}");
+        return;
     }
     if let Err(e) = std::fs::rename(&tmp, &path) {
         eprintln!("Clyde: failed to rename prefs: {e}");
@@ -95,7 +170,11 @@ mod tests {
     }
     #[test]
     fn test_prefs_roundtrip() {
-        let p = Prefs { lang: "zh".into(), size: "L".into(), ..Default::default() };
+        let p = Prefs {
+            lang: "zh".into(),
+            size: "L".into(),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&p).unwrap();
         let p2: Prefs = serde_json::from_str(&json).unwrap();
         assert_eq!(p2.lang, "zh");

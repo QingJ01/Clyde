@@ -4,20 +4,32 @@
 // Checks if the Electron app is running; if not, launches it detached.
 // Uses shared server discovery helpers and should exit quickly in normal cases.
 
+const fs = require("fs");
 const { spawn } = require("child_process");
 const path = require("path");
 const { discoverClydePort } = require("./server-config");
 
 const TIMEOUT_MS = 300;
+const CONFIG_NAME = "auto-start-config.json";
 
 discoverClydePort({ timeoutMs: TIMEOUT_MS }, (port) => {
-  if (port) {
+  if (port || !isAutoStartEnabled()) {
     process.exit(0);
     return;
   }
   launchApp();
   process.exit(0);
 });
+
+function isAutoStartEnabled() {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, CONFIG_NAME), "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed.enabled === true;
+  } catch {
+    return false;
+  }
+}
 
 function launchApp() {
   const isPackaged = __dirname.includes("app.asar");

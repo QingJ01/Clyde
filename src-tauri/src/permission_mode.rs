@@ -3,11 +3,11 @@
 //! Tracks mode changes from three sources (priority: Hook > Transcript > Settings)
 //! and triggers mode_notice windows when the mode changes.
 
+use crate::util::MutexExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Manager};
-use crate::util::MutexExt;
 
 pub type ModeTracker = Arc<Mutex<HashMap<String, SessionModeState>>>;
 
@@ -34,41 +34,43 @@ impl PermissionMode {
 
     pub fn label(&self, lang: &str) -> &'static str {
         match (self, lang) {
-            (Self::Default, "zh")            => "正常审批模式",
-            (Self::AcceptEdits, "zh")        => "自动编辑模式",
-            (Self::BypassPermissions, "zh")  => "跳过所有审批",
-            (Self::Plan, "zh")               => "仅规划模式",
-            (Self::Unknown(_), "zh")         => "未知模式",
-            (Self::Default, _)               => "Normal Approval",
-            (Self::AcceptEdits, _)           => "Auto-Edit Mode",
-            (Self::BypassPermissions, _)     => "Bypass All Permissions",
-            (Self::Plan, _)                  => "Plan-Only Mode",
-            (Self::Unknown(_), _)            => "Unknown Mode",
+            (Self::Default, "zh") => "正常审批模式",
+            (Self::AcceptEdits, "zh") => "自动编辑模式",
+            (Self::BypassPermissions, "zh") => "跳过所有审批",
+            (Self::Plan, "zh") => "仅规划模式",
+            (Self::Unknown(_), "zh") => "未知模式",
+            (Self::Default, _) => "Normal Approval",
+            (Self::AcceptEdits, _) => "Auto-Edit Mode",
+            (Self::BypassPermissions, _) => "Bypass All Permissions",
+            (Self::Plan, _) => "Plan-Only Mode",
+            (Self::Unknown(_), _) => "Unknown Mode",
         }
     }
 
     pub fn description(&self, lang: &str) -> &'static str {
         match (self, lang) {
-            (Self::Default, "zh")            => "工具调用需要你的批准",
-            (Self::AcceptEdits, "zh")        => "编辑操作自动通过，其他工具仍可能需要审批",
-            (Self::BypassPermissions, "zh")  => "不会再弹出权限审批气泡",
-            (Self::Plan, "zh")               => "不执行工具，仅做规划",
-            (Self::Unknown(_), "zh")         => "",
-            (Self::Default, _)               => "Tool calls require your approval",
-            (Self::AcceptEdits, _)           => "Edit operations auto-approved, other tools may still need approval",
-            (Self::BypassPermissions, _)     => "Permission bubbles will not appear",
-            (Self::Plan, _)                  => "No tool execution, planning only",
-            (Self::Unknown(_), _)            => "",
+            (Self::Default, "zh") => "工具调用需要你的批准",
+            (Self::AcceptEdits, "zh") => "编辑操作自动通过，其他工具仍可能需要审批",
+            (Self::BypassPermissions, "zh") => "不会再弹出权限审批气泡",
+            (Self::Plan, "zh") => "不执行工具，仅做规划",
+            (Self::Unknown(_), "zh") => "",
+            (Self::Default, _) => "Tool calls require your approval",
+            (Self::AcceptEdits, _) => {
+                "Edit operations auto-approved, other tools may still need approval"
+            }
+            (Self::BypassPermissions, _) => "Permission bubbles will not appear",
+            (Self::Plan, _) => "No tool execution, planning only",
+            (Self::Unknown(_), _) => "",
         }
     }
 
     pub fn icon(&self) -> &'static str {
         match self {
-            Self::Default           => "🔒",
-            Self::AcceptEdits       => "✏️",
+            Self::Default => "🔒",
+            Self::AcceptEdits => "✏️",
             Self::BypassPermissions => "⚡",
-            Self::Plan              => "📋",
-            Self::Unknown(_)        => "❓",
+            Self::Plan => "📋",
+            Self::Unknown(_) => "❓",
         }
     }
 }
@@ -139,19 +141,25 @@ pub fn update_session_mode(
         }
     } else {
         // First time seeing this session: record but don't notify
-        map.insert(session_id.to_string(), SessionModeState {
-            current_mode: new_mode,
-            last_seen_at: Instant::now(),
-            last_source: source,
-            last_notified_mode: None,
-        });
+        map.insert(
+            session_id.to_string(),
+            SessionModeState {
+                current_mode: new_mode,
+                last_seen_at: Instant::now(),
+                last_source: source,
+                last_notified_mode: None,
+            },
+        );
     }
 }
 
 /// Get the current permission mode for a session.
 #[allow(dead_code)]
 pub fn get_session_mode(tracker: &ModeTracker, session_id: &str) -> Option<PermissionMode> {
-    tracker.lock_or_recover().get(session_id).map(|s| s.current_mode.clone())
+    tracker
+        .lock_or_recover()
+        .get(session_id)
+        .map(|s| s.current_mode.clone())
 }
 
 /// Create a mode_notice bubble window.
@@ -173,7 +181,12 @@ fn trigger_mode_notice(app: &AppHandle, _session_id: &str, mode: &PermissionMode
         let existing: Vec<String> = {
             let map = bubbles.lock_or_recover();
             map.iter()
-                .filter(|(_, e)| matches!(e.data.window_kind, crate::permission::WindowKind::ModeNotice))
+                .filter(|(_, e)| {
+                    matches!(
+                        e.data.window_kind,
+                        crate::permission::WindowKind::ModeNotice
+                    )
+                })
                 .map(|(id, _)| id.clone())
                 .collect()
         };
@@ -212,12 +225,15 @@ mod tests {
         assert!(map.is_empty());
         drop(map);
         // Manually insert to simulate update_session_mode logic
-        tracker.lock().unwrap().insert("s1".into(), SessionModeState {
-            current_mode: PermissionMode::Default,
-            last_seen_at: Instant::now(),
-            last_source: ModeSource::Hook,
-            last_notified_mode: None,
-        });
+        tracker.lock().unwrap().insert(
+            "s1".into(),
+            SessionModeState {
+                current_mode: PermissionMode::Default,
+                last_seen_at: Instant::now(),
+                last_source: ModeSource::Hook,
+                last_notified_mode: None,
+            },
+        );
         let map = tracker.lock().unwrap();
         assert_eq!(map["s1"].current_mode, PermissionMode::Default);
         assert!(map["s1"].last_notified_mode.is_none());
@@ -226,12 +242,24 @@ mod tests {
     #[test]
     fn test_mode_parse() {
         assert_eq!(PermissionMode::from_str("default"), PermissionMode::Default);
-        assert_eq!(PermissionMode::from_str("askBeforeEdits"), PermissionMode::Default);
-        assert_eq!(PermissionMode::from_str("acceptEdits"), PermissionMode::AcceptEdits);
-        assert_eq!(PermissionMode::from_str("bypassPermissions"), PermissionMode::BypassPermissions);
+        assert_eq!(
+            PermissionMode::from_str("askBeforeEdits"),
+            PermissionMode::Default
+        );
+        assert_eq!(
+            PermissionMode::from_str("acceptEdits"),
+            PermissionMode::AcceptEdits
+        );
+        assert_eq!(
+            PermissionMode::from_str("bypassPermissions"),
+            PermissionMode::BypassPermissions
+        );
         assert_eq!(PermissionMode::from_str("plan"), PermissionMode::Plan);
         assert_eq!(PermissionMode::from_str(""), PermissionMode::Default);
-        assert!(matches!(PermissionMode::from_str("custom"), PermissionMode::Unknown(_)));
+        assert!(matches!(
+            PermissionMode::from_str("custom"),
+            PermissionMode::Unknown(_)
+        ));
     }
 
     #[test]
@@ -243,12 +271,15 @@ mod tests {
     #[test]
     fn test_same_mode_no_change() {
         let tracker = make_tracker();
-        tracker.lock().unwrap().insert("s1".into(), SessionModeState {
-            current_mode: PermissionMode::Default,
-            last_seen_at: Instant::now(),
-            last_source: ModeSource::Hook,
-            last_notified_mode: None,
-        });
+        tracker.lock().unwrap().insert(
+            "s1".into(),
+            SessionModeState {
+                current_mode: PermissionMode::Default,
+                last_seen_at: Instant::now(),
+                last_source: ModeSource::Hook,
+                last_notified_mode: None,
+            },
+        );
         // Simulate same mode update
         {
             let mut map = tracker.lock().unwrap();
@@ -261,12 +292,15 @@ mod tests {
     #[test]
     fn test_lower_priority_ignored() {
         let tracker = make_tracker();
-        tracker.lock().unwrap().insert("s1".into(), SessionModeState {
-            current_mode: PermissionMode::AcceptEdits,
-            last_seen_at: Instant::now(),
-            last_source: ModeSource::Hook,
-            last_notified_mode: Some(PermissionMode::AcceptEdits),
-        });
+        tracker.lock().unwrap().insert(
+            "s1".into(),
+            SessionModeState {
+                current_mode: PermissionMode::AcceptEdits,
+                last_seen_at: Instant::now(),
+                last_source: ModeSource::Hook,
+                last_notified_mode: Some(PermissionMode::AcceptEdits),
+            },
+        );
         // Settings source (lower priority) should not override Hook source
         let map = tracker.lock().unwrap();
         let state = &map["s1"];

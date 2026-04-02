@@ -37,6 +37,7 @@
   let isReacting = false;
   let reactTimer: ReturnType<typeof setTimeout> | null = null;
   let snapPreview = $state(false);
+  let opacity = $state(1);
 
   function movePupils(dx: number, dy: number) {
     // Eyes follow cursor (larger movement)
@@ -60,45 +61,55 @@
     reactTimer = setTimeout(() => { isReacting = false; }, durationMs);
   }
 
-  onMount(async () => {
-    unlisten.push(await listen<{ state: string; svg: string; flip?: boolean }>('state-change', ({ payload }) => {
-      if (isReacting) return;
-      currentState.set(payload.state as any);
-      currentSvg.set(payload.svg);
-      svgContent = getSvg(payload.svg);
-      flipped = payload.flip ?? false;
-    }));
+  onMount(() => {
+    const setup = async () => {
+      const config = await invoke<{ opacity: number }>('get_pet_config');
+      opacity = config.opacity ?? 1;
 
-    unlisten.push(await listen<{ dx: number; dy: number }>('eye-move', ({ payload }) => {
-      movePupils(payload.dx, payload.dy);
-    }));
+      unlisten.push(await listen<{ state: string; svg: string; flip?: boolean }>('state-change', ({ payload }) => {
+        if (isReacting) return;
+        currentState.set(payload.state as any);
+        currentSvg.set(payload.svg);
+        svgContent = getSvg(payload.svg);
+        flipped = payload.flip ?? false;
+      }));
 
-    unlisten.push(await listen<{ enabled: boolean }>('dnd-change', ({ payload }) => {
-      dndEnabled.set(payload.enabled);
-    }));
+      unlisten.push(await listen<{ dx: number; dy: number }>('eye-move', ({ payload }) => {
+        movePupils(payload.dx, payload.dy);
+      }));
 
-    unlisten.push(await listen<{ svg: string; duration_ms: number }>('play-click-reaction', ({ payload }) => {
-      playReaction(payload.svg, payload.duration_ms);
-    }));
+      unlisten.push(await listen<{ enabled: boolean }>('dnd-change', ({ payload }) => {
+        dndEnabled.set(payload.enabled);
+      }));
 
-    unlisten.push(await listen('start-drag-reaction', () => {
-      currentSvg.set('clyde-react-drag.svg');
-      svgContent = getSvg('clyde-react-drag.svg');
-    }));
+      unlisten.push(await listen<{ svg: string; duration_ms: number }>('play-click-reaction', ({ payload }) => {
+        playReaction(payload.svg, payload.duration_ms);
+      }));
 
-    unlisten.push(await listen<{ active: boolean }>('snap-preview', ({ payload }) => {
-      snapPreview = payload.active;
-    }));
+      unlisten.push(await listen<{ opacity: number }>('pet-config-changed', ({ payload }) => {
+        opacity = payload.opacity ?? 1;
+      }));
 
-    unlisten.push(await listen('trigger-yawn', () => { invoke('trigger_sleep_sequence'); }));
-    unlisten.push(await listen('trigger-wake', () => { invoke('trigger_wake'); }));
-    unlisten.push(await listen('mini-peek-in', () => { invoke('mini_peek_in'); }));
-    unlisten.push(await listen('mini-peek-out', () => { invoke('mini_peek_out'); }));
-    unlisten.push(await listen<string>('set-size', ({ payload }) => { invoke('set_window_size', { size: payload }); }));
-    unlisten.push(await listen<string>('set-lang', ({ payload }) => {
-      currentLang.set(payload);
-      invoke('set_lang', { lang: payload });
-    }));
+      unlisten.push(await listen('start-drag-reaction', () => {
+        currentSvg.set('clyde-react-drag.svg');
+        svgContent = getSvg('clyde-react-drag.svg');
+      }));
+
+      unlisten.push(await listen<{ active: boolean }>('snap-preview', ({ payload }) => {
+        snapPreview = payload.active;
+      }));
+
+      unlisten.push(await listen('trigger-yawn', () => { invoke('trigger_sleep_sequence'); }));
+      unlisten.push(await listen('trigger-wake', () => { invoke('trigger_wake'); }));
+      unlisten.push(await listen('mini-peek-in', () => { invoke('mini_peek_in'); }));
+      unlisten.push(await listen('mini-peek-out', () => { invoke('mini_peek_out'); }));
+      unlisten.push(await listen<string>('set-size', ({ payload }) => { invoke('set_window_size', { size: payload }); }));
+      unlisten.push(await listen<string>('set-lang', ({ payload }) => {
+        currentLang.set(payload);
+        invoke('set_lang', { lang: payload });
+      }));
+    };
+    setup();
   });
 
   onDestroy(() => {
@@ -107,7 +118,7 @@
   });
 </script>
 
-<div id="pet-container" class:snap-preview={snapPreview}>
+<div id="pet-container" class:snap-preview={snapPreview} style:opacity={opacity}>
   <div class="svg-wrapper" style:transform={flipped ? 'scaleX(-1)' : ''}>
     {@html svgContent}
   </div>

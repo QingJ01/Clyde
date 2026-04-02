@@ -530,6 +530,8 @@ dependencies = [
  "anyhow",
  "axum",
  "block2",
+ "core-foundation",
+ "core-graphics",
  "dirs 5.0.1",
  "nix",
  "objc2-app-kit",

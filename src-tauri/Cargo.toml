@@ -40,6 +40,8 @@ nix = { version = "0.29", features = ["signal"] }
 block2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSWindow", "NSWorkspace"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSNotification", "NSOperation", "NSString", "NSThread", "block2"] }
+core-foundation = "0.10.1"
+core-graphics = "0.25.0"
 
 [dev-dependencies]
 tempfile = "3"

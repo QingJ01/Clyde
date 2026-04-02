@@ -8,6 +8,7 @@
     state: string;
     agent: string;
     pid: number | null;
+    updated_secs_ago: number;
   }
 
   interface MenuData {
@@ -16,6 +17,13 @@
     is_mini: boolean;
     lang: string;
     size: string;
+    opacity: number;
+    position_locked: boolean;
+    click_through: boolean;
+    auto_hide_fullscreen: boolean;
+    auto_dnd_meetings: boolean;
+    auto_start_with_claude: boolean;
+    environment_controls_supported: boolean;
   }
 
   let data: MenuData | null = $state(null);
@@ -39,13 +47,17 @@
     if (!data) return key;
     const zh: Record<string, string> = {
       size: '大小', miniMode: '极简模式', dnd: '勿扰模式',
-      sessions: '会话', language: '语言', quit: '退出',
-      noSessions: '没有活跃会话', justNow: '刚刚',
+      opacity: '透明度', lockPosition: '锁定位置', clickThrough: '点击穿透',
+      hideOnFullscreen: '全屏时自动隐藏', autoDndMeetings: '会议/共享时自动勿扰',
+      autoStart: '随 Claude Code 启动', sessions: '会话', language: '语言', quit: '退出',
+      noSessions: '没有活跃会话', justNow: '刚刚', macOnly: '仅 macOS',
     };
     const en: Record<string, string> = {
       size: 'Size', miniMode: 'Mini Mode', dnd: 'Sleep (Do Not Disturb)',
-      sessions: 'Sessions', language: 'Language', quit: 'Quit',
-      noSessions: 'No active sessions', justNow: 'just now',
+      opacity: 'Opacity', lockPosition: 'Lock Position', clickThrough: 'Click Through',
+      hideOnFullscreen: 'Hide on Fullscreen', autoDndMeetings: 'Auto DND During Meetings',
+      autoStart: 'Start with Claude Code', sessions: 'Sessions', language: 'Language', quit: 'Quit',
+      noSessions: 'No active sessions', justNow: 'just now', macOnly: 'macOS only',
     };
     return (data.lang === 'zh' ? zh[key] : en[key]) ?? key;
   }
@@ -53,6 +65,36 @@
   function stateLabel(s: string): string {
     if (!data) return s;
     return (data.lang === 'zh' ? stateLabelsZh[s] : stateLabelsEn[s]) ?? s;
+  }
+
+  function platformLimitedLabel(key: string): string {
+    const label = t(key);
+    return data?.environment_controls_supported ? label : `${label} (${t('macOnly')})`;
+  }
+
+  function sessionAgeLabel(seconds: number): string {
+    if (!data) return t('justNow');
+    if (seconds < 5) return t('justNow');
+    if (data.lang === 'zh') {
+      if (seconds < 60) return `${seconds}秒前`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}分钟前`;
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)}小时前`;
+      return `${Math.floor(seconds / 86400)}天前`;
+    }
+
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+  }
+
+  function agentMeta(agent: string): { label: string; kind: string } {
+    const normalized = agent.trim().toLowerCase();
+    if (normalized.includes('claude')) return { label: 'Claude', kind: 'claude' };
+    if (normalized.includes('codex')) return { label: 'Codex', kind: 'codex' };
+    if (normalized.includes('copilot')) return { label: 'Copilot', kind: 'copilot' };
+    if (!normalized) return { label: 'Unknown', kind: 'unknown' };
+    return { label: agent.trim(), kind: 'generic' };
   }
 
   async function action(id: string) {
@@ -70,24 +112,35 @@
     activeSubmenu = activeSubmenu === name ? null : name;
   }
 
-  onMount(async () => {
-    data = await invoke('get_menu_data');
+  onMount(() => {
+    let unlistenFocus: (() => void) | undefined;
 
-    // Close on blur (click outside)
-    const win = getCurrentWindow();
-    const unlisten = await win.onFocusChanged(({ payload: focused }) => {
-      if (!focused && !closing) closeMenu();
-    });
+    const setup = async () => {
+      data = await invoke('get_menu_data');
 
-    // Close on Escape
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeMenu();
+      // Close on blur (click outside)
+      const win = getCurrentWindow();
+      unlistenFocus = await win.onFocusChanged(({ payload: focused }) => {
+        if (!focused && !closing) closeMenu();
+      });
+
+      // Close on Escape
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') closeMenu();
+      };
+      window.addEventListener('keydown', onKey);
+
+      return () => {
+        unlistenFocus?.();
+        window.removeEventListener('keydown', onKey);
+      };
     };
-    window.addEventListener('keydown', onKey);
+
+    let cleanup: (() => void) | undefined;
+    setup().then((fn) => { cleanup = fn; });
 
     return () => {
-      unlisten();
-      window.removeEventListener('keydown', onKey);
+      cleanup?.();
     };
   });
 </script>
@@ -95,7 +148,7 @@
 {#if data}
 <div class="menu">
   <!-- Size -->
-  <div class="item has-sub" onmouseenter={() => activeSubmenu = 'size'} onmouseleave={() => activeSubmenu = null}>
+  <div class="item has-sub" role="button" tabindex="-1" onmouseenter={() => activeSubmenu = 'size'} onmouseleave={() => activeSubmenu = null}>
     <span>{t('size')}</span>
     <span class="arrow">›</span>
     {#if activeSubmenu === 'size'}
@@ -113,16 +166,65 @@
     {#if data.is_mini}<span class="check">✓</span>{/if}
   </button>
 
+  <!-- Opacity -->
+  <div class="item has-sub" role="button" tabindex="-1" onmouseenter={() => activeSubmenu = 'opacity'} onmouseleave={() => activeSubmenu = null}>
+    <span>{t('opacity')}</span>
+    <span class="value">{data.opacity}%</span>
+    <span class="arrow">›</span>
+    {#if activeSubmenu === 'opacity'}
+      <div class="submenu">
+        {#each [100, 90, 80, 70, 60, 50, 40] as level}
+          <button class="item" class:checked={data.opacity === level} onclick={() => action(`opacity-${level}`)}>{level}%</button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
+  <button class="item" onclick={() => action('lock-position')}>
+    <span>{t('lockPosition')}</span>
+    {#if data.position_locked}<span class="check">✓</span>{/if}
+  </button>
+
+  <button class="item" onclick={() => action('click-through')}>
+    <span>{t('clickThrough')}</span>
+    {#if data.click_through}<span class="check">✓</span>{/if}
+  </button>
+
+  <button
+    class="item"
+    class:disabled={!data.environment_controls_supported}
+    onclick={() => action('hide-on-fullscreen')}
+    disabled={!data.environment_controls_supported}
+  >
+    <span>{platformLimitedLabel('hideOnFullscreen')}</span>
+    {#if data.auto_hide_fullscreen}<span class="check">✓</span>{/if}
+  </button>
+
+  <button
+    class="item"
+    class:disabled={!data.environment_controls_supported}
+    onclick={() => action('auto-dnd-meetings')}
+    disabled={!data.environment_controls_supported}
+  >
+    <span>{platformLimitedLabel('autoDndMeetings')}</span>
+    {#if data.auto_dnd_meetings}<span class="check">✓</span>{/if}
+  </button>
+
   <!-- DND -->
   <button class="item" onclick={() => action('dnd')}>
     <span>{t('dnd')}</span>
     {#if data.is_dnd}<span class="check">✓</span>{/if}
   </button>
 
+  <button class="item" onclick={() => action('autostart')}>
+    <span>{t('autoStart')}</span>
+    {#if data.auto_start_with_claude}<span class="check">✓</span>{/if}
+  </button>
+
   <div class="sep"></div>
 
   <!-- Sessions -->
-  <div class="item has-sub" onmouseenter={() => activeSubmenu = 'sessions'} onmouseleave={() => activeSubmenu = null}>
+  <div class="item has-sub" role="button" tabindex="-1" onmouseenter={() => activeSubmenu = 'sessions'} onmouseleave={() => activeSubmenu = null}>
     <span>{t('sessions')} ({data.sessions.length})</span>
     <span class="arrow">›</span>
     {#if activeSubmenu === 'sessions'}
@@ -131,11 +233,12 @@
           <div class="item disabled">{t('noSessions')}</div>
         {:else}
           {#each data.sessions as sess}
+            {@const meta = agentMeta(sess.agent)}
             <button class="item session-item" onclick={() => action(`session-${sess.id}`)}>
               <span class="session-icon">{stateIcons[sess.state] ?? '⚡'}</span>
-              <span class="session-agent">{sess.agent}</span>
+              <span class={`session-agent agent-${meta.kind}`}>{meta.label}</span>
               <span class="session-state">{stateLabel(sess.state)}</span>
-              <span class="session-time">{t('justNow')}</span>
+              <span class="session-time">{sessionAgeLabel(sess.updated_secs_ago)}</span>
             </button>
           {/each}
         {/if}
@@ -146,7 +249,7 @@
   <div class="sep"></div>
 
   <!-- Language -->
-  <div class="item has-sub" onmouseenter={() => activeSubmenu = 'language'} onmouseleave={() => activeSubmenu = null}>
+  <div class="item has-sub" role="button" tabindex="-1" onmouseenter={() => activeSubmenu = 'language'} onmouseleave={() => activeSubmenu = null}>
     <span>{t('language')}</span>
     <span class="arrow">›</span>
     {#if activeSubmenu === 'language'}
@@ -204,7 +307,14 @@
     color: #999;
     cursor: default;
   }
+  .item:disabled {
+    color: #999;
+    cursor: default;
+  }
   .item.disabled:hover {
+    background: none;
+  }
+  .item:disabled:hover {
     background: none;
   }
   .item.quit {
@@ -226,6 +336,13 @@
     font-size: 16px;
     color: #aaa;
     font-weight: 300;
+  }
+
+  .value {
+    margin-left: auto;
+    margin-right: 10px;
+    color: #6b7280;
+    font-size: 12px;
   }
 
   .sep {
@@ -270,9 +387,32 @@
     flex-shrink: 0;
   }
   .session-agent {
+    display: inline-flex;
+    align-items: center;
+    min-width: 58px;
+    padding: 3px 8px;
+    border-radius: 999px;
     font-weight: 600;
-    font-size: 12.5px;
+    font-size: 11.5px;
+    letter-spacing: 0.01em;
     color: #1d1d1f;
+    background: rgba(17, 24, 39, 0.08);
+    border: 1px solid rgba(17, 24, 39, 0.08);
+  }
+  .session-agent.agent-claude {
+    color: #7c2d12;
+    background: rgba(251, 146, 60, 0.18);
+    border-color: rgba(249, 115, 22, 0.2);
+  }
+  .session-agent.agent-codex {
+    color: #0f4c5c;
+    background: rgba(45, 212, 191, 0.18);
+    border-color: rgba(13, 148, 136, 0.2);
+  }
+  .session-agent.agent-copilot {
+    color: #1d4ed8;
+    background: rgba(96, 165, 250, 0.18);
+    border-color: rgba(59, 130, 246, 0.2);
   }
   .session-state {
     font-size: 12px;

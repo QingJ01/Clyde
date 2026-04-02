@@ -1,41 +1,53 @@
+use crate::prefs::{self, SharedPrefs};
+use crate::state_machine::SharedState;
+use crate::util::MutexExt;
+use crate::windows::{self, get_pet_bounds, MonitorArea, WindowBounds};
+use crate::{emit_state, sync_hit};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, PhysicalPosition};
-use crate::prefs::{self, SharedPrefs};
-use crate::util::MutexExt;
-use crate::state_machine::SharedState;
-use crate::windows::get_pet_bounds;
-use crate::{emit_state, sync_hit};
 
 pub const SNAP_TOLERANCE: i32 = 30;
 #[allow(dead_code)]
-pub const PEEK_OFFSET: i32    = 25;
+pub const PEEK_OFFSET: i32 = 25;
 pub const MINI_OFFSET_RATIO: f64 = 0.486;
 
 /// Which screen edge the pet is snapping to.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SnapSide { Left, Right }
+pub enum SnapSide {
+    Left,
+    Right,
+}
 
 pub fn should_snap_to_edge(app: &AppHandle) -> Option<EdgeSnap> {
     let bounds = get_pet_bounds(app)?;
-    let mon = crate::windows::get_pet_monitor(app);
-    let mon_left = mon.x;
-    let mon_right = mon.x + mon.width as i32;
+    edge_snap_for_bounds(app, &bounds)
+}
+
+pub fn edge_snap_for_bounds(app: &AppHandle, bounds: &WindowBounds) -> Option<EdgeSnap> {
+    let monitor = windows::monitor_for_bounds(app, bounds)?;
+    let screen_left = monitor.x;
+    let screen_right = monitor.x + monitor.width as i32;
     let pet_right = bounds.x + bounds.width as i32;
 
-    if mon_right - pet_right <= SNAP_TOLERANCE {
-        Some(EdgeSnap { mon_left, mon_right, width: bounds.width, side: SnapSide::Right })
-    } else if bounds.x - mon_left <= SNAP_TOLERANCE {
-        Some(EdgeSnap { mon_left, mon_right, width: bounds.width, side: SnapSide::Left })
+    if screen_right - pet_right <= SNAP_TOLERANCE {
+        Some(EdgeSnap {
+            monitor,
+            width: bounds.width,
+            side: SnapSide::Right,
+        })
+    } else if bounds.x - screen_left <= SNAP_TOLERANCE {
+        Some(EdgeSnap {
+            monitor,
+            width: bounds.width,
+            side: SnapSide::Left,
+        })
     } else {
         None
     }
 }
 
 pub struct EdgeSnap {
-    /// Left edge of the monitor the pet is on (0 for primary, may be negative for left monitors).
-    pub mon_left: i32,
-    /// Right edge of the monitor the pet is on.
-    pub mon_right: i32,
+    pub monitor: MonitorArea,
     pub width: u32,
     pub side: SnapSide,
 }
@@ -45,27 +57,104 @@ impl EdgeSnap {
     /// Uses monitor-relative coordinates so it works on any monitor.
     pub fn hidden_x(&self) -> i32 {
         match self.side {
-            SnapSide::Right => self.mon_right - (self.width as f64 * MINI_OFFSET_RATIO).round() as i32,
-            SnapSide::Left  => self.mon_left - (self.width as f64 * (1.0 - MINI_OFFSET_RATIO)).round() as i32,
+            SnapSide::Right => {
+                self.monitor.x + self.monitor.width as i32
+                    - (self.width as f64 * MINI_OFFSET_RATIO).round() as i32
+            }
+            SnapSide::Left => {
+                self.monitor.x - (self.width as f64 * (1.0 - MINI_OFFSET_RATIO)).round() as i32
+            }
         }
+    }
+}
+
+pub fn snap_side_key(side: SnapSide) -> &'static str {
+    match side {
+        SnapSide::Left => "left",
+        SnapSide::Right => "right",
+    }
+}
+
+pub fn snap_side_from_key(side: &str) -> Option<SnapSide> {
+    match side {
+        "left" => Some(SnapSide::Left),
+        "right" => Some(SnapSide::Right),
+        _ => None,
+    }
+}
+
+pub fn remember_snap_for_current_monitor(app: &AppHandle) {
+    let Some(snap) = should_snap_to_edge(app) else {
+        return;
+    };
+    let Some(bounds) = get_pet_bounds(app) else {
+        return;
+    };
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return;
+    };
+    let mut prefs = prefs_state.lock_or_recover();
+    let placement = prefs
+        .monitor_positions
+        .entry(snap.monitor.key.clone())
+        .or_default();
+    placement.x = bounds.x;
+    placement.y = bounds.y;
+    placement.mini_side = Some(snap_side_key(snap.side).into());
+    prefs::save(app, &prefs);
+}
+
+fn preferred_snap_side(
+    monitor: &MonitorArea,
+    bounds: &WindowBounds,
+    prefs: &prefs::Prefs,
+) -> SnapSide {
+    if let Some(saved) = prefs
+        .monitor_positions
+        .get(&monitor.key)
+        .and_then(|placement| placement.mini_side.as_deref())
+        .and_then(snap_side_from_key)
+    {
+        return saved;
+    }
+
+    let monitor_mid = monitor.x + monitor.width as i32 / 2;
+    let pet_mid = bounds.x + bounds.width as i32 / 2;
+    if pet_mid >= monitor_mid {
+        SnapSide::Right
+    } else {
+        SnapSide::Left
     }
 }
 
 /// Exit mini mode: restore position, emit idle state, sync hit window.
 /// Returns true if the pet was in mini mode and was restored.
 pub fn do_exit_mini(app: &AppHandle) -> bool {
-    let Some(prefs_state) = app.try_state::<SharedPrefs>() else { return false };
-    let (was_mini, pre_x, pre_y) = {
-        let mut p = prefs_state.lock_or_recover();
-        if !p.mini_mode { return false; }
-        p.mini_mode = false;
-        let pos = (true, p.pre_mini_x, p.pre_mini_y);
-        prefs::save(app, &p);
-        pos
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return false;
     };
-    if !was_mini { return false; }
+    let monitor_key = get_pet_bounds(app)
+        .and_then(|bounds| windows::monitor_for_bounds(app, &bounds))
+        .map(|monitor| monitor.key);
+    let (was_mini, restore_x, restore_y) = {
+        let mut p = prefs_state.lock_or_recover();
+        if !p.mini_mode {
+            return false;
+        }
+        p.mini_mode = false;
+        let restore = monitor_key
+            .as_ref()
+            .and_then(|key| p.monitor_positions.get(key))
+            .map(|placement| (placement.x, placement.y))
+            .unwrap_or((p.pre_mini_x, p.pre_mini_y));
+        prefs::save(app, &p);
+        (true, restore.0, restore.1)
+    };
+    if !was_mini {
+        return false;
+    }
     if let Some(pet) = app.get_webview_window("pet") {
-        let _ = pet.set_position(PhysicalPosition::new(pre_x, pre_y));
+        let _ = pet.set_position(PhysicalPosition::new(restore_x, restore_y));
     }
     // Restore the real state from the state machine instead of hardcoding idle
     let (resolved, svg) = if let Some(state) = app.try_state::<SharedState>() {
@@ -84,27 +173,44 @@ pub fn do_exit_mini(app: &AppHandle) -> bool {
 /// Enter mini mode: save current position, animate to edge, emit mini state.
 /// Returns true if mini mode was entered.
 pub fn do_enter_mini(app: &AppHandle) -> bool {
-    let Some(prefs_state) = app.try_state::<SharedPrefs>() else { return false };
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return false;
+    };
+    let bounds = match get_pet_bounds(app) {
+        Some(bounds) => bounds,
+        None => return false,
+    };
+    let monitor = match windows::monitor_for_bounds(app, &bounds) {
+        Some(monitor) => monitor,
+        None => return false,
+    };
 
     // Determine target X: from edge snap (left or right), or default to right edge
-    let (hidden_x, cur_x, cur_y) = if let Some(snap) = should_snap_to_edge(app) {
-        let bounds = match get_pet_bounds(app) { Some(b) => b, None => return false };
-        (snap.hidden_x(), bounds.x, bounds.y)
+    let (hidden_x, side) = if let Some(snap) = edge_snap_for_bounds(app, &bounds) {
+        (snap.hidden_x(), snap.side)
     } else {
-        // Not near any edge (triggered from tray/context menu) — default to right edge of current monitor
-        let mon = crate::windows::get_pet_monitor(app);
-        let pet = match app.get_webview_window("pet") { Some(p) => p, None => return false };
-        let size = pet.outer_size().unwrap_or_default();
-        let pos = pet.outer_position().unwrap_or_default();
-        let hx = (mon.x + mon.width as i32) - (size.width as f64 * MINI_OFFSET_RATIO).round() as i32;
-        (hx, pos.x, pos.y)
+        // Not near any edge (triggered from tray/context menu) — use preferred side or default to right
+        let side = {
+            let prefs = prefs_state.lock_or_recover();
+            preferred_snap_side(&monitor, &bounds, &prefs)
+        };
+        let snap = EdgeSnap {
+            monitor: monitor.clone(),
+            width: bounds.width,
+            side,
+        };
+        (snap.hidden_x(), side)
     };
 
     {
         let mut p = prefs_state.lock_or_recover();
-        p.pre_mini_x = cur_x;
-        p.pre_mini_y = cur_y;
+        p.pre_mini_x = bounds.x;
+        p.pre_mini_y = bounds.y;
         p.mini_mode = true;
+        let placement = p.monitor_positions.entry(monitor.key.clone()).or_default();
+        placement.x = bounds.x;
+        placement.y = bounds.y;
+        placement.mini_side = Some(snap_side_key(side).into());
         prefs::save(app, &p);
     }
 
@@ -116,7 +222,13 @@ pub fn do_enter_mini(app: &AppHandle) -> bool {
 
 /// Animate window with parabolic arc (jump transition).
 #[allow(dead_code)]
-pub fn animate_parabola(app: &AppHandle, target_x: i32, target_y: i32, peak_height: i32, duration_ms: u64) {
+pub fn animate_parabola(
+    app: &AppHandle,
+    target_x: i32,
+    target_y: i32,
+    peak_height: i32,
+    duration_ms: u64,
+) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Some(pet) = app.get_webview_window("pet") {
@@ -147,7 +259,7 @@ pub fn peek_in(app: &AppHandle) {
     if let Some(snap) = should_snap_to_edge(app) {
         let target_x = match snap.side {
             SnapSide::Right => snap.hidden_x() - PEEK_OFFSET,
-            SnapSide::Left  => snap.hidden_x() + PEEK_OFFSET,
+            SnapSide::Left => snap.hidden_x() + PEEK_OFFSET,
         };
         animate_to_x(app, target_x, 200);
     }

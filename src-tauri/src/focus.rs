@@ -20,7 +20,10 @@ pub fn focus_window_by_pid(pid: u32, _cwd: &str) {
                 target_pid: u32,
                 found_hwnd: isize,
             }
-            let mut search = SearchData { target_pid: pid, found_hwnd: 0 };
+            let mut search = SearchData {
+                target_pid: pid,
+                found_hwnd: 0,
+            };
 
             unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
                 let search = &mut *(lparam.0 as *mut SearchData);
@@ -85,17 +88,28 @@ pub fn focus_window_by_pid(pid: u32, _cwd: &str) {
 
 #[tauri::command]
 pub fn focus_terminal_for_session(
-    _app: tauri::AppHandle,
-    state: tauri::State<crate::state_machine::SharedState>,
-    session_id: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state_machine::SharedState>,
+    bubbles: tauri::State<'_, crate::permission::BubbleMap>,
+    session_id: Option<String>,
+    pid: Option<u32>,
+    cwd: Option<String>,
 ) {
     use crate::util::MutexExt;
-    let sm = state.lock_or_recover();
-    if let Some(entry) = sm.sessions.get(&session_id) {
-        if let Some(pid) = entry.source_pid {
-            let cwd = entry.cwd.clone();
-            drop(sm);
-            focus_window_by_pid(pid, &cwd);
-        }
+    let fallback = session_id.as_deref().and_then(|session_id| {
+        let sm = state.lock_or_recover();
+        sm.sessions
+            .get(session_id)
+            .map(|entry| (entry.source_pid, entry.cwd.clone()))
+    });
+
+    let target_pid = pid.or_else(|| fallback.as_ref().and_then(|(pid, _)| *pid));
+    let target_cwd = cwd
+        .or_else(|| fallback.as_ref().map(|(_, cwd)| cwd.clone()))
+        .unwrap_or_default();
+
+    if let Some(p) = target_pid {
+        focus_window_by_pid(p, &target_cwd);
     }
+    crate::dismiss_transient_ui(&app, &state, &bubbles);
 }

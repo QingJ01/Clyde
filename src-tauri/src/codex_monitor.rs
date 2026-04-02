@@ -1,10 +1,10 @@
+use crate::state_machine::SharedState;
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom, BufReader};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::time::Duration;
 use tauri::AppHandle;
 use crate::util::MutexExt;
-use crate::state_machine::SharedState;
 
 const POLL_INTERVAL_MS: u64 = 1500;
 
@@ -119,7 +119,13 @@ fn scan_codex_root(
 /// Update state machine and emit — same as `update_session_and_emit` but
 /// atomically sets `agent_id = "Codex"` in the same lock to avoid the default
 /// "claude-code" label from `SessionEntry::new()`.
-fn codex_update_and_emit(app: &AppHandle, state: &SharedState, session_id: &str, state_str: &str, event: &str) {
+fn codex_update_and_emit(
+    app: &AppHandle,
+    state: &SharedState,
+    session_id: &str,
+    state_str: &str,
+    event: &str,
+) {
     let (resolved, svg) = {
         let mut sm = state.lock_or_recover();
         if event == "SessionEnd" {
@@ -174,7 +180,10 @@ fn map_codex_event(event: &serde_json::Value) -> Option<&'static str> {
                     if role == "assistant" {
                         // Check if this is a final response (has output_text content)
                         if let Some(content) = event["payload"]["content"].as_array() {
-                            if content.iter().any(|c| c["type"].as_str() == Some("output_text")) {
+                            if content
+                                .iter()
+                                .any(|c| c["type"].as_str() == Some("output_text"))
+                            {
                                 return Some("idle");
                             }
                         }
@@ -315,7 +324,9 @@ fn find_codex_jsonl_files(base: &std::path::Path) -> Vec<PathBuf> {
     collect_jsonl_recursive(base, &mut files);
     // Filter to only files modified within the last hour
     files.retain(|path| {
-        let age = path.metadata().ok()
+        let age = path
+            .metadata()
+            .ok()
             .and_then(|m| m.modified().ok())
             .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
             .map(|d| d.as_secs())
@@ -327,7 +338,10 @@ fn find_codex_jsonl_files(base: &std::path::Path) -> Vec<PathBuf> {
 
 /// Recursively collect .jsonl files from a directory tree.
 fn collect_jsonl_recursive(dir: &std::path::Path, files: &mut Vec<PathBuf>) {
-    let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
