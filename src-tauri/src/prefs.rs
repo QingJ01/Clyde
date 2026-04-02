@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 
 pub type SharedPrefs = Arc<Mutex<Prefs>>;
+pub const DEFAULT_PERMISSION_DECISION_WINDOW_SECS: u16 = 12;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MonitorPlacement {
@@ -49,6 +50,8 @@ pub struct Prefs {
     pub auto_hide_fullscreen: bool,
     #[serde(default)]
     pub auto_dnd_meetings: bool,
+    #[serde(default = "default_permission_decision_window_secs")]
+    pub permission_decision_window_secs: u16,
     #[serde(default)]
     pub monitor_positions: HashMap<String, MonitorPlacement>,
 }
@@ -86,9 +89,16 @@ fn default_true() -> bool {
 fn default_opacity() -> f32 {
     1.0
 }
+fn default_permission_decision_window_secs() -> u16 {
+    DEFAULT_PERMISSION_DECISION_WINDOW_SECS
+}
 
 pub fn normalize_opacity(opacity: f32) -> f32 {
     opacity.clamp(0.4, 1.0)
+}
+
+pub fn normalize_permission_decision_window_secs(secs: u16) -> u16 {
+    secs.clamp(8, 120)
 }
 
 impl Default for Prefs {
@@ -109,6 +119,7 @@ impl Default for Prefs {
             click_through: false,
             auto_hide_fullscreen: false,
             auto_dnd_meetings: false,
+            permission_decision_window_secs: default_permission_decision_window_secs(),
             monitor_positions: HashMap::new(),
         }
     }
@@ -133,6 +144,8 @@ pub fn load(app: &AppHandle) -> Prefs {
     };
     let mut prefs: Prefs = serde_json::from_str(&raw).unwrap_or_default();
     prefs.opacity = normalize_opacity(prefs.opacity);
+    prefs.permission_decision_window_secs =
+        normalize_permission_decision_window_secs(prefs.permission_decision_window_secs);
     prefs
 }
 
@@ -167,6 +180,10 @@ mod tests {
         assert_eq!(p.size, "S");
         assert_eq!(p.lang, "en");
         assert!(p.show_tray);
+        assert_eq!(
+            p.permission_decision_window_secs,
+            DEFAULT_PERMISSION_DECISION_WINDOW_SECS
+        );
     }
     #[test]
     fn test_prefs_roundtrip() {
@@ -179,5 +196,11 @@ mod tests {
         let p2: Prefs = serde_json::from_str(&json).unwrap();
         assert_eq!(p2.lang, "zh");
         assert_eq!(p2.size, "L");
+    }
+    #[test]
+    fn test_permission_decision_window_normalization() {
+        assert_eq!(normalize_permission_decision_window_secs(3), 8);
+        assert_eq!(normalize_permission_decision_window_secs(12), 12);
+        assert_eq!(normalize_permission_decision_window_secs(240), 120);
     }
 }

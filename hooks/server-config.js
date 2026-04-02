@@ -10,6 +10,7 @@ const SERVER_PORT_COUNT = 7;
 const SERVER_PORTS = Array.from({ length: SERVER_PORT_COUNT }, (_, i) => DEFAULT_SERVER_PORT + i);
 const STATE_PATH = "/state";
 const PERMISSION_PATH = "/permission";
+const ELICITATION_PATH = "/elicitation";
 const RUNTIME_CONFIG_PATH = path.join(os.homedir(), ".clyde", "runtime.json");
 
 function normalizePort(value) {
@@ -114,6 +115,11 @@ function splitPortCandidates(preferredPort, options = {}) {
 function buildPermissionUrl(port) {
   const safePort = normalizePort(port) || DEFAULT_SERVER_PORT;
   return `http://127.0.0.1:${safePort}${PERMISSION_PATH}`;
+}
+
+function buildElicitationUrl(port) {
+  const safePort = normalizePort(port) || DEFAULT_SERVER_PORT;
+  return `http://127.0.0.1:${safePort}${ELICITATION_PATH}`;
 }
 
 function readHeader(res, headerName) {
@@ -270,10 +276,12 @@ module.exports = {
   CLYDE_SERVER_HEADER,
   CLYDE_SERVER_ID,
   DEFAULT_SERVER_PORT,
+  ELICITATION_PATH,
   PERMISSION_PATH,
   RUNTIME_CONFIG_PATH,
   SERVER_PORTS,
   STATE_PATH,
+  buildElicitationUrl,
   buildPermissionUrl,
   clearRuntimeConfig,
   discoverClydePort,

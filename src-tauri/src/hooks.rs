@@ -78,7 +78,6 @@ impl HookInstaller {
             "SubagentStart",
             "SubagentStop",
             "Notification",
-            "Elicitation",
             "WorktreeCreate",
             "ConfigChange",
         ];
@@ -152,50 +151,72 @@ impl HookInstaller {
             }
         }
 
-        // Step 3: Register permission HTTP hook under PermissionRequest event.
-        // Claude Code sends a blocking HTTP POST to this URL when requesting tool permission.
-        // Response format: { hookSpecificOutput: { hookEventName, decision: { behavior } } }
+        // Step 3: Register blocking HTTP hooks for PermissionRequest and Elicitation.
         if let Some(port) = self.server_port {
-            let perm_url = format!("http://127.0.0.1:{port}/permission");
-            let arr = hooks
-                .entry("PermissionRequest")
-                .or_insert_with(|| serde_json::json!([]));
-            if let Some(list) = arr.as_array_mut() {
-                // Remove any old Clyde permission hook entries
-                list.retain(|v| {
-                    // Check nested hooks array for our URL
+            for (event, path) in [
+                ("PermissionRequest", "/permission"),
+                ("Elicitation", "/elicitation"),
+            ] {
+                let url = format!("http://127.0.0.1:{port}{path}");
+                let arr = hooks.entry(event).or_insert_with(|| serde_json::json!([]));
+                if let Some(list) = arr.as_array_mut() {
+                    list.retain(|v| {
+                        if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
+                            if cmd.contains(HOOK_SCRIPT_NAME) {
+                                return false;
+                            }
+                        }
+                        if let Some(inner) = v.get("hooks").and_then(|h| h.as_array()) {
+                            for hook in inner {
+                                if let Some(cmd) = hook.get("command").and_then(|c| c.as_str()) {
+                                    if cmd.contains(HOOK_SCRIPT_NAME) {
+                                        return false;
+                                    }
+                                }
+                                if let Some(url) = hook.get("url").and_then(|u| u.as_str()) {
+                                    if url.contains(path) {
+                                        return false;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(url) = v.get("url").and_then(|u| u.as_str()) {
+                            if url.contains(path) {
+                                return false;
+                            }
+                        }
+                        true
+                    });
+                    list.push(serde_json::json!({
+                        "matcher": "",
+                        "hooks": [{
+                            "type": "http",
+                            "url":  url,
+                            "timeout": 600,
+                        }]
+                    }));
+                }
+            }
+        }
+
+        // Step 3b: Clean up stray entries in other events (e.g. old command-hook routing).
+        for event in ["PreToolUse", "PostToolUse", "Elicitation"] {
+            if let Some(arr) = hooks.get_mut(event).and_then(|v| v.as_array_mut()) {
+                arr.retain(|v| {
+                    if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
+                        if cmd.contains(HOOK_SCRIPT_NAME) {
+                            return false;
+                        }
+                    }
                     if let Some(inner) = v.get("hooks").and_then(|h| h.as_array()) {
                         for hook in inner {
-                            if let Some(url) = hook.get("url").and_then(|u| u.as_str()) {
-                                if url.contains("/permission") {
+                            if let Some(cmd) = hook.get("command").and_then(|c| c.as_str()) {
+                                if cmd.contains(HOOK_SCRIPT_NAME) {
                                     return false;
                                 }
                             }
                         }
                     }
-                    // Also check flat format in case of old registration
-                    if let Some(url) = v.get("url").and_then(|u| u.as_str()) {
-                        if url.contains("/permission") {
-                            return false;
-                        }
-                    }
-                    true
-                });
-                list.push(serde_json::json!({
-                    "matcher": "",
-                    "hooks": [{
-                        "type": "http",
-                        "url":  perm_url,
-                        "timeout": 600,
-                    }]
-                }));
-            }
-        }
-
-        // Step 3b: Clean up stray entries in other events (e.g. old PreToolUse permission hook)
-        for event in ["PreToolUse", "PostToolUse"] {
-            if let Some(arr) = hooks.get_mut(event).and_then(|v| v.as_array_mut()) {
-                arr.retain(|v| {
                     if let Some(url) = v.get("url").and_then(|u| u.as_str()) {
                         if url.contains("/permission") {
                             return false;
@@ -392,6 +413,22 @@ mod tests {
             .unwrap()
             .contains("/permission"));
 
+        let elicitation_arr = parsed["hooks"]["Elicitation"].as_array().unwrap();
+        assert_eq!(
+            elicitation_arr.len(),
+            1,
+            "Elicitation should have one entry"
+        );
+        let elicitation_entry = &elicitation_arr[0];
+        assert_eq!(elicitation_entry["matcher"].as_str().unwrap(), "");
+        let elicitation_hooks = elicitation_entry["hooks"].as_array().unwrap();
+        assert_eq!(elicitation_hooks.len(), 1);
+        assert_eq!(elicitation_hooks[0]["type"].as_str().unwrap(), "http");
+        assert!(elicitation_hooks[0]["url"]
+            .as_str()
+            .unwrap()
+            .contains("/elicitation"));
+
         let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
     }
 
@@ -423,6 +460,9 @@ mod tests {
         // PermissionRequest should not duplicate
         let perm_arr = parsed["hooks"]["PermissionRequest"].as_array().unwrap();
         assert_eq!(perm_arr.len(), 1, "PermissionRequest should not duplicate");
+
+        let elicitation_arr = parsed["hooks"]["Elicitation"].as_array().unwrap();
+        assert_eq!(elicitation_arr.len(), 1, "Elicitation should not duplicate");
 
         let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
     }
@@ -483,6 +523,60 @@ mod tests {
         assert!(
             entry.get("type").is_none(),
             "flat type field must not exist at top level"
+        );
+
+        let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
+    }
+
+    #[test]
+    fn test_elicitation_flat_entry_is_rewritten() {
+        let tmp_file = temp_settings_path("flat-elicitation");
+        let old_settings = serde_json::json!({
+            "hooks": {
+                "Elicitation": [
+                    { "type": "http", "url": "http://127.0.0.1:23333/elicitation", "timeout": 600 }
+                ]
+            }
+        });
+        std::fs::write(
+            &tmp_file,
+            serde_json::to_string_pretty(&old_settings).unwrap(),
+        )
+        .unwrap();
+
+        let installer = HookInstaller {
+            settings_path: Some(tmp_file.clone()),
+            server_port: Some(23334),
+            auto_start_enabled: false,
+        };
+        installer.register().expect("register should succeed");
+
+        let contents = std::fs::read_to_string(&tmp_file).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        let elicitation_arr = parsed["hooks"]["Elicitation"].as_array().unwrap();
+        assert_eq!(
+            elicitation_arr.len(),
+            1,
+            "should have exactly one Elicitation entry"
+        );
+
+        let entry = &elicitation_arr[0];
+        assert!(
+            entry.get("matcher").is_some(),
+            "entry must have matcher field"
+        );
+        let inner = entry["hooks"]
+            .as_array()
+            .expect("entry must have hooks array");
+        assert_eq!(inner.len(), 1);
+        assert_eq!(
+            inner[0]["url"].as_str().unwrap(),
+            "http://127.0.0.1:23334/elicitation"
+        );
+        assert!(entry.get("url").is_none(), "flat url field must not exist");
+        assert!(
+            entry.get("type").is_none(),
+            "flat type field must not exist"
         );
 
         let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());

@@ -11,6 +11,7 @@ pub struct SessionEntry {
     pub source_pid: Option<u32>,
     pub cwd: String,
     pub agent_id: String,
+    pub summary: String,
 }
 
 impl SessionEntry {
@@ -21,8 +22,20 @@ impl SessionEntry {
             source_pid: None,
             cwd: String::new(),
             agent_id: "claude-code".into(),
+            summary: String::new(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSummary {
+    pub id: String,
+    pub state: String,
+    pub source_pid: Option<u32>,
+    pub cwd: String,
+    pub agent_id: String,
+    pub summary: String,
+    pub updated_secs_ago: u64,
 }
 
 /// Priority of each state for display resolution.
@@ -185,22 +198,22 @@ impl StateMachine {
     }
 
     /// Session summaries for context menu display.
-    pub fn session_summaries(&self) -> Vec<(String, String, Option<u32>, String, u64)> {
+    pub fn session_summaries(&self) -> Vec<SessionSummary> {
         let now = Instant::now();
         let mut sessions: Vec<_> = self
             .sessions
             .iter()
-            .map(|(id, e)| {
-                (
-                    id.clone(),
-                    e.state.clone(),
-                    e.source_pid,
-                    e.agent_id.clone(),
-                    now.duration_since(e.updated_at).as_secs(),
-                )
+            .map(|(id, e)| SessionSummary {
+                id: id.clone(),
+                state: e.state.clone(),
+                source_pid: e.source_pid,
+                cwd: e.cwd.clone(),
+                agent_id: e.agent_id.clone(),
+                summary: e.summary.clone(),
+                updated_secs_ago: now.duration_since(e.updated_at).as_secs(),
             })
             .collect();
-        sessions.sort_by_key(|(_, _, _, _, age_secs)| *age_secs);
+        sessions.sort_by_key(|session| session.updated_secs_ago);
         sessions
     }
 
@@ -390,8 +403,8 @@ mod tests {
         sm.sessions.insert("newer".into(), newer);
 
         let summaries = sm.session_summaries();
-        assert_eq!(summaries[0].0, "newer");
-        assert_eq!(summaries[1].0, "older");
-        assert!(summaries[0].4 <= summaries[1].4);
+        assert_eq!(summaries[0].id, "newer");
+        assert_eq!(summaries[1].id, "older");
+        assert!(summaries[0].updated_secs_ago <= summaries[1].updated_secs_ago);
     }
 }
