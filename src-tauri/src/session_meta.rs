@@ -59,20 +59,17 @@ pub(crate) fn clean_resume_summary(raw: &str) -> String {
     let mut fallback = String::new();
 
     for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+        let cleaned_line = clean_summary_line(line);
+        if cleaned_line.is_empty() {
             continue;
         }
         if fallback.is_empty() {
-            fallback = collapse_whitespace(trimmed);
+            fallback = cleaned_line.clone();
         }
-        if is_resume_noise(trimmed) {
+        if is_resume_noise(&cleaned_line) {
             continue;
         }
-        let cleaned = collapse_whitespace(trimmed);
-        if !cleaned.is_empty() {
-            return truncate_summary(&cleaned, 88);
-        }
+        return truncate_summary(&cleaned_line, 88);
     }
 
     truncate_summary(&fallback, 88)
@@ -390,6 +387,20 @@ fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn clean_summary_line(line: &str) -> String {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let without_resume = trimmed
+        .strip_prefix("/resume")
+        .map(str::trim_start)
+        .unwrap_or(trimmed);
+
+    collapse_whitespace(without_resume)
+}
+
 fn is_resume_noise(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.starts_with('#')
@@ -429,6 +440,18 @@ mod tests {
     fn cleans_resume_summary_from_shell_noise() {
         let raw = "➜ repo ls\nfoo.txt\n修复权限弹窗没有确认按钮的问题";
         assert_eq!(clean_resume_summary(raw), "修复权限弹窗没有确认按钮的问题");
+    }
+
+    #[test]
+    fn strips_resume_prefix_from_inline_summary() {
+        let raw = "/resume 修一下 permission request 的交互样式";
+        assert_eq!(clean_resume_summary(raw), "修一下 permission request 的交互样式");
+    }
+
+    #[test]
+    fn skips_resume_only_line_and_uses_following_summary() {
+        let raw = "/resume\n修一下 permission request 的交互样式";
+        assert_eq!(clean_resume_summary(raw), "修一下 permission request 的交互样式");
     }
 
     #[test]
