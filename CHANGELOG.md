@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.1.4 — Tray Hide, Permission Queue & Click-Through Fix
+
+### New Features
+
+- **Hide to Tray** — Clyde can be hidden from the desktop without quitting. Tray menu shows dynamic "Hide to Tray" / "Show Clyde" item; close button hides instead of exits when tray is present; left-click tray icon toggles visibility (Windows/Linux); incoming permission requests auto-restore the pet
+- **macOS Space following** (PR [#8](https://github.com/QingJ01/Clyde/pull/8) by [@0xC3B6](https://github.com/0xC3B6)) — Pet, hit, and bubble windows follow the active desktop Space via `NSWindowCollectionBehaviorMoveToActiveSpace`
+- **Permission request queue** — Multiple simultaneous requests are queued and shown one at a time; next request surfaces automatically when the current one is resolved
+- **Elicitation hook support** — Claude Code's `Elicitation` hook (MCP structured input prompts) renders as a rich bubble form with enum choice lists, booleans, numbers, text, and textarea fields with validation
+- **Configurable permission wait time** — New "Permission Wait Time" submenu (12 s / 20 s / 30 s / 45 s / 60 s) in tray and context menus, persisted to disk
+- **Per-agent session badges** — Sessions in the right-click menu show colour-coded pills: orange for Claude, teal for Codex, blue for Copilot
+- **Context menu expanded** — Opacity, position lock, click-through, auto-hide on fullscreen, and auto-DND during meetings are now accessible from the right-click context menu (previously tray-only)
+- **Drag snap preview** — Dragging pet near a screen edge shows a blue highlight indicator before mini-mode triggers
+- **Per-monitor snap-side memory** — Mini Mode remembers which edge (left/right) was last used on each monitor independently
+- **Multi-monitor drag clamping** — Pet clamps to whichever monitor it overlaps most, not always the primary display
+- **Auto-start gating** — "Start with Claude Code" toggle now writes `auto-start-config.json` sidecar so the hook respects the enabled/disabled state
+- **Richer permission bubble metadata** — Bubbles display agent label, cleaned session summary, project folder name, and short session ID
+
+### Bug Fixes
+
+- **Click-through toggle double-fired** — Tauri v2 broadcasts menu events globally, so tray clicks reached both `handle_tray_event` and `handle_context_menu_event`, toggling twice and ending up unchanged. Context menu handler now requires `ctx-` prefix and ignores unprefixed tray items
+- **Drag ghosting on high-DPI** — `drag_start` stored logical pixels while `drag_move` received physical from `toPhys()`, causing jump/drift on retina displays. Unified to physical pixels end-to-end
+- **Bubble window shadow** — Permission bubbles had a native drop shadow; `set_shadow(false)` now called at creation
+- **Tray left-click not working on Windows/Linux** — Tauri's default `show_menu_on_left_click(true)` intercepted left-click before the custom handler. Now set to `false`
+- **Restore from tray broke click-through** — `do_show_from_tray` unconditionally showed hit window, ignoring click-through state. Now re-applies `apply_click_through` on restore
+- **Auto-hide overrode manual hide-to-tray** — Dismissing a fullscreen window called `do_show_from_tray` even if user had manually hidden Clyde. Restore path now guarded with `is_hidden()`
+- **Reminder bubble stuck after session advanced** — Watchdog now breaks early when session's `updated_at` advances; deferred `dismiss_transient_ui` cleans up stragglers
+- **Permission summary showed `/resume` noise** — Summary cleaner now strips leading `/resume` token
+- **Mini Mode snapped to primary monitor** — `should_snap_to_edge` used `primary_monitor()` instead of the current monitor. Now uses `monitor_for_bounds`
+- **Mini Mode restored to wrong position after monitor change** — Position restore now prefers per-monitor placement entry, falling back to pre-mini coords only if none exists
+- **Drag threshold used logical coords on HiDPI** — The 3px threshold was compared against logical coords while the pipeline used physical. Now consistently uses `toPhys()`
+- **Drag position saved twice** — Duplicate save in `drag_end` could overwrite per-monitor placement data. Removed
+- **BubbleCard Svelte warnings** — Fixed component warnings
+- **Stuck reminder dismissal** — Fixed reminder not clearing properly
+
+---
+
 ## v0.1.3 — Bug Fixes & Stability
 
 ### Bug Fixes
