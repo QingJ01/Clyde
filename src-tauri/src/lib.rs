@@ -302,29 +302,6 @@ pub(crate) fn toggle_auto_dnd_meetings_pref(app: &AppHandle) {
     prefs::save(app, &prefs);
 }
 
-pub(crate) fn restore_interaction(app: &AppHandle) {
-    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
-        return;
-    };
-
-    {
-        let mut prefs = prefs_state.lock_or_recover();
-        prefs.lock_position = false;
-        prefs.click_through = false;
-        prefs.auto_hide_fullscreen = false;
-        prefs::save(app, &prefs);
-        emit_interaction_state(app, &prefs);
-    }
-
-    if let Some(state) = app.try_state::<SharedState>() {
-        set_auto_hidden(app, &state, false);
-    } else if let Some(pet) = app.get_webview_window("pet") {
-        let _ = pet.show();
-    }
-
-    apply_click_through(app, false);
-    sync_hit(app);
-}
 
 #[tauri::command]
 fn drag_start(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
@@ -336,12 +313,11 @@ fn drag_start(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     d.dragging = false;
     d.start_mouse_x = x;
     d.start_mouse_y = y;
-    // Window position in logical coords to match mouse coords
+    // Window position in physical pixels to match mouse coords (toPhys in frontend)
     if let Some(pet) = app.get_webview_window("pet") {
         if let Ok(pos) = pet.outer_position() {
-            let scale = pet.scale_factor().unwrap_or(1.0);
-            d.start_win_x = (pos.x as f64 / scale).round() as i32;
-            d.start_win_y = (pos.y as f64 / scale).round() as i32;
+            d.start_win_x = pos.x;
+            d.start_win_y = pos.y;
         }
     }
 }
@@ -411,16 +387,9 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
             windows::clamp_window_to_monitor(new_x, new_y, pet_w, pet_h, &monitor, MIN_VISIBLE);
     }
 
-    // Convert logical → physical for set_position
-    let scale = app
-        .get_webview_window("pet")
-        .and_then(|p| p.scale_factor().ok())
-        .unwrap_or(1.0);
+    // All coords are physical pixels — set_position directly
     if let Some(pet) = app.get_webview_window("pet") {
-        let _ = pet.set_position(PhysicalPosition::new(
-            (new_x as f64 * scale).round() as i32,
-            (new_y as f64 * scale).round() as i32,
-        ));
+        let _ = pet.set_position(PhysicalPosition::new(new_x, new_y));
     }
 
     // Construct updated bounds from the new position + known size (avoid second IPC query)
@@ -643,16 +612,6 @@ fn show_context_menu(
         i18n::t("mini", &lang)
     };
     if let Ok(m) = MenuItem::with_id(&app, "ctx-mini", &mini_label, true, None::<&str>) {
-        items.push(Box::new(m));
-    }
-
-    if let Ok(m) = MenuItem::with_id(
-        &app,
-        "ctx-restore-interaction",
-        i18n::t("restoreInteraction", &lang),
-        true,
-        None::<&str>,
-    ) {
         items.push(Box::new(m));
     }
 
@@ -1028,7 +987,6 @@ pub(crate) fn do_hide_to_tray(app: &AppHandle) {
         .map(|p| p.lock_or_recover().lang.clone())
         .unwrap_or_else(|| "en".into());
     tray::rebuild_menu(app, &lang);
-    println!("Clyde: hidden to tray");
 }
 
 /// Show pet + hit + bubble windows from system tray.
@@ -1037,11 +995,13 @@ pub(crate) fn do_show_from_tray(app: &AppHandle) {
         *flag.lock_or_recover() = false;
     }
     if let Some(pet) = app.get_webview_window("pet") { let _ = pet.show(); }
-    windows::show_hit_window(app);
-    // Re-sync hit window position (may have drifted during hide)
-    if let Some(bounds) = windows::get_pet_bounds(app) {
-        windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
-    }
+    // Re-apply click-through state: if on, keep hit window hidden;
+    // if off, show and sync the hit window.
+    let click_through = app
+        .try_state::<SharedPrefs>()
+        .map(|p| p.lock_or_recover().click_through)
+        .unwrap_or(false);
+    apply_click_through(app, click_through);
     // Restore bubble windows
     if let Some(bubbles) = app.try_state::<permission::BubbleMap>() {
         permission::show_all_bubbles(app, &bubbles);
@@ -1050,7 +1010,6 @@ pub(crate) fn do_show_from_tray(app: &AppHandle) {
         .map(|p| p.lock_or_recover().lang.clone())
         .unwrap_or_else(|| "en".into());
     tray::rebuild_menu(app, &lang);
-    println!("Clyde: restored from tray");
 }
 
 /// Toggle visibility — used from tray click and context menu.
@@ -1437,8 +1396,12 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
         }
         return;
     }
-    // Strip optional "ctx-" prefix for backward compat with tray menu
-    let action = id.strip_prefix("ctx-").unwrap_or(id);
+    // Only handle context-menu items (ctx- prefix). Tray menu items
+    // (no prefix) are handled by tray::handle_tray_event — ignore them
+    // here to avoid double-toggling.
+    let Some(action) = id.strip_prefix("ctx-") else {
+        return;
+    };
     let mut refresh_tray = false;
     match action {
         "dnd" => {
@@ -1451,10 +1414,6 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
             } else {
                 mini::do_enter_mini(app);
             }
-            refresh_tray = true;
-        }
-        "restore-interaction" => {
-            restore_interaction(app);
             refresh_tray = true;
         }
         "lock-position" => {
@@ -1621,7 +1580,6 @@ fn setup_hit_window(app: &AppHandle, initial_bounds: Option<&windows::WindowBoun
     };
     if let Some(bounds) = initial_bounds.or(fallback_bounds.as_ref()) {
         sync_hit_for_bounds(app, bounds);
-        println!("Clyde: hit window synced to pet bounds");
     } else {
         eprintln!("Clyde: could not get pet bounds for hit window sync");
     }
@@ -1629,7 +1587,6 @@ fn setup_hit_window(app: &AppHandle, initial_bounds: Option<&windows::WindowBoun
         macos_spaces::apply_space_follow(&hit);
     }
     windows::show_hit_window(app);
-    println!("Clyde: hit window synced to startup bounds");
     let click_through = app
         .try_state::<SharedPrefs>()
         .map(|prefs| {

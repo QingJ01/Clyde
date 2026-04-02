@@ -91,6 +91,7 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
     match window {
         Ok(window) => {
             crate::macos_spaces::apply_space_follow(&window);
+            let _ = window.set_shadow(false);
             let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
             bubbles.lock_or_recover().insert(
                 id,

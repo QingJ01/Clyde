@@ -13,25 +13,6 @@ use tauri::{
 
 pub type SharedTray = Arc<Mutex<Option<TrayIcon>>>;
 
-fn restore_interaction_label(lang: &str, click_through: bool, locked: bool) -> String {
-    let base = t("restoreInteraction", lang);
-    if lang == "zh" {
-        match (click_through, locked) {
-            (true, true) => format!("{base}（关闭穿透/锁定）"),
-            (true, false) => format!("{base}（关闭穿透）"),
-            (false, true) => format!("{base}（关闭锁定）"),
-            (false, false) => base,
-        }
-    } else {
-        match (click_through, locked) {
-            (true, true) => format!("{base} (disable click through / lock)"),
-            (true, false) => format!("{base} (disable click through)"),
-            (false, true) => format!("{base} (disable lock)"),
-            (false, false) => base,
-        }
-    }
-}
-
 fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
     // Show/Hide toggle — label depends on current hidden state
     let hidden = crate::is_hidden(app);
@@ -173,13 +154,6 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
         t("mini", lang)
     };
     let mini = MenuItem::with_id(app, "mini", mini_label, true, None::<&str>)?;
-    let restore_interaction = MenuItem::with_id(
-        app,
-        "restore-interaction",
-        restore_interaction_label(lang, click_through, is_locked),
-        true,
-        None::<&str>,
-    )?;
     let lock_label = if is_locked {
         format!("✓ {}", t("lockPosition", lang))
     } else {
@@ -232,7 +206,6 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
             &visibility,
             &dnd,
             &mini,
-            &restore_interaction,
             &lock_position,
             &click_through_item,
             &fullscreen_hide,
@@ -256,13 +229,28 @@ pub fn build_tray(app: &AppHandle, lang: &str) -> tauri::Result<TrayIcon> {
             None => return Err(tauri::Error::AssetNotFound("window icon".to_string())),
         })
         .menu(&menu)
+        .show_menu_on_left_click(false)
         .on_menu_event(|app, event| handle_tray_event(app, event.id().as_ref()))
         .on_tray_icon_event(|tray, event| {
             // On macOS, left-click opens the menu by default — avoid conflicting toggle.
-            // On Windows/Linux, left-click toggles visibility.
+            // On Windows/Linux, left-click toggles visibility (or disables click-through).
             #[cfg(not(target_os = "macos"))]
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                crate::do_toggle_visibility(tray.app_handle());
+                let app = tray.app_handle();
+                let is_click_through = app
+                    .try_state::<SharedPrefs>()
+                    .map(|p| p.lock_or_recover().click_through)
+                    .unwrap_or(false);
+                if is_click_through {
+                    // Disable click-through first, then show if hidden
+                    crate::toggle_click_through_pref(app);
+                    if crate::is_hidden(app) {
+                        crate::do_show_from_tray(app);
+                    }
+                    rebuild_current_menu(app);
+                } else {
+                    crate::do_toggle_visibility(app);
+                }
             }
             #[cfg(target_os = "macos")]
             { let _ = (&tray, &event); } // suppress unused warnings
@@ -348,10 +336,6 @@ fn handle_tray_event(app: &AppHandle, id: &str) {
             } else {
                 mini::do_enter_mini(app);
             }
-            rebuild_current_menu(app);
-        }
-        "restore-interaction" => {
-            crate::restore_interaction(app);
             rebuild_current_menu(app);
         }
         "lock-position" => {
