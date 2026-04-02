@@ -110,6 +110,18 @@ impl StateMachine {
         self.sessions.remove(session_id);
     }
 
+    /// Restore the persistent display state after a transient reminder has been acknowledged.
+    pub fn dismiss_transient_state(&mut self) -> Option<(String, String)> {
+        if !matches!(self.current_state.as_str(), "attention" | "notification") {
+            return None;
+        }
+        let resolved = self.resolve_display_state();
+        let svg = self.svg_for_state(&resolved);
+        self.current_state = resolved.clone();
+        self.current_svg = svg.clone();
+        Some((resolved, svg))
+    }
+
     pub fn update_session_state(&mut self, session_id: &str, state: &str, event: &str) {
         // Oneshot states: play animation but don't persist as session state.
         if ONESHOT_STATES.contains(&state) {
@@ -287,6 +299,33 @@ mod tests {
             s.state, "working",
             "notification should not change session state"
         );
+    }
+
+    #[test]
+    fn test_dismiss_transient_state_restores_resolved_state() {
+        let mut sm = StateMachine::new();
+        sm.sessions
+            .insert("s1".into(), SessionEntry::new("working"));
+        sm.current_state = "attention".into();
+        sm.current_svg = "clyde-happy.svg".into();
+
+        let dismissed = sm.dismiss_transient_state();
+
+        assert!(dismissed.is_some());
+        assert_eq!(sm.current_state, "working");
+        assert_eq!(sm.current_svg, "clyde-working-typing.svg");
+    }
+
+    #[test]
+    fn test_dismiss_transient_state_ignores_persistent_state() {
+        let mut sm = StateMachine::new();
+        sm.current_state = "working".into();
+        sm.current_svg = "clyde-working-typing.svg".into();
+
+        let dismissed = sm.dismiss_transient_state();
+
+        assert!(dismissed.is_none());
+        assert_eq!(sm.current_state, "working");
     }
 
     #[test]

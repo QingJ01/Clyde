@@ -42,7 +42,7 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
 
     let (x, y) = initial_bubble_position(app, bubbles);
 
-    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("")
         .inner_size(BUBBLE_WIDTH as f64, 200.0)
         .position(x as f64, y as f64)
@@ -54,9 +54,7 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
 
     // transparent() and shadow() are only available on Windows/Linux
     #[cfg(not(target_os = "macos"))]
-    {
-        builder = builder.transparent(true).shadow(false);
-    }
+    let builder = builder.transparent(true).shadow(false);
 
     let window = builder.build();
 
@@ -90,6 +88,19 @@ pub fn close_bubble(app: &AppHandle, bubbles: &BubbleMap, id: &str) {
         let _ = win.destroy();
     }
     reposition_bubbles(app, bubbles);
+}
+
+pub fn close_mode_notice_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
+    let ids: Vec<String> = {
+        let map = bubbles.lock_or_recover();
+        map.iter()
+            .filter(|(_, entry)| matches!(entry.data.window_kind, WindowKind::ModeNotice))
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+    for id in ids {
+        close_bubble(app, bubbles, &id);
+    }
 }
 
 pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {

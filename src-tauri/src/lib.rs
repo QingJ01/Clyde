@@ -844,6 +844,21 @@ pub(crate) fn emit_state(app: &AppHandle, state_str: &str, svg: &str) {
     );
 }
 
+pub(crate) fn dismiss_transient_ui(
+    app: &AppHandle,
+    state: &SharedState,
+    bubbles: &permission::BubbleMap,
+) {
+    let dismissed = {
+        let mut sm = state.lock_or_recover();
+        sm.dismiss_transient_state()
+    };
+    if let Some((resolved, svg)) = dismissed {
+        emit_state(app, &resolved, &svg);
+    }
+    permission::close_mode_notice_bubbles(app, bubbles);
+}
+
 /// Map a normal state to its mini-mode equivalent.
 fn mini_svg_for_state(state: &str) -> (&'static str, &'static str) {
     match state {

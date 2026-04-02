@@ -137,6 +137,13 @@ async fn post_state(
         if let Some(pid) = payload.source_pid {
             crate::focus::focus_window_by_pid(pid, payload.cwd.as_deref().unwrap_or(""));
         }
+        let app = ctx.app.clone();
+        let state = ctx.state.clone();
+        let bubbles = ctx.bubble_map.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+            crate::dismiss_transient_ui(&app, &state, &bubbles);
+        });
     }
 
     (StatusCode::OK, headers, "ok".into())
@@ -197,6 +204,7 @@ async fn post_permission(
         mode_label: None,
         mode_description: None,
     };
+    let bubble_session_id = bubble_data.session_id.clone();
 
     let bubble_opened = permission::show_bubble(&ctx.app, &ctx.bubble_map, bubble_data);
     if !bubble_opened {
@@ -218,16 +226,20 @@ async fn post_permission(
     // detecting no resolution within a short grace period after session state changes.
     let watchdog_ctx = ctx.clone();
     let watchdog_id = entry_id.clone();
+    let watchdog_session_id = bubble_session_id;
+    let opened_at = std::time::Instant::now();
+    let session_existed_at_open = {
+        let sm = ctx.state.lock_or_recover();
+        sm.sessions.contains_key(&watchdog_session_id)
+    };
     let watchdog = tauri::async_runtime::spawn(async move {
         // Poll: if the pending_perm entry was removed (by resolve_permission from bubble click),
-        // this task is orphaned and will just exit. Otherwise, close bubble on timeout.
+        // this task is orphaned and will just exit. Otherwise, close bubble on timeout or
+        // when the session advances, which usually means the terminal handled the prompt.
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
         loop {
             interval.tick().await;
-            if tokio::time::Instant::now() > deadline {
-                break;
-            }
             // Check if the entry was already resolved
             let still_pending = watchdog_ctx
                 .pending_perms
@@ -236,6 +248,16 @@ async fn post_permission(
             if !still_pending {
                 return;
             } // resolved by user click — nothing to do
+            let session_advanced = {
+                let sm = watchdog_ctx.state.lock_or_recover();
+                match sm.sessions.get(&watchdog_session_id) {
+                    Some(entry) => entry.updated_at > opened_at,
+                    None => session_existed_at_open,
+                }
+            };
+            if session_advanced || tokio::time::Instant::now() > deadline {
+                break;
+            }
         }
         // Timeout: close bubble and send default deny
         if let Some(tx) = watchdog_ctx

@@ -87,8 +87,28 @@ pub fn focus_window_by_pid(pid: u32, _cwd: &str) {
 }
 
 #[tauri::command]
-pub fn focus_terminal_for_session(pid: Option<u32>, cwd: Option<String>) {
-    if let Some(p) = pid {
-        focus_window_by_pid(p, cwd.as_deref().unwrap_or(""));
+pub fn focus_terminal_for_session(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state_machine::SharedState>,
+    bubbles: tauri::State<'_, crate::permission::BubbleMap>,
+    session_id: Option<String>,
+    pid: Option<u32>,
+    cwd: Option<String>,
+) {
+    let fallback = session_id.as_deref().and_then(|session_id| {
+        let sm = state.lock().unwrap_or_else(|e| e.into_inner());
+        sm.sessions
+            .get(session_id)
+            .map(|entry| (entry.source_pid, entry.cwd.clone()))
+    });
+
+    let target_pid = pid.or_else(|| fallback.as_ref().and_then(|(pid, _)| *pid));
+    let target_cwd = cwd
+        .or_else(|| fallback.as_ref().map(|(_, cwd)| cwd.clone()))
+        .unwrap_or_default();
+
+    if let Some(p) = target_pid {
+        focus_window_by_pid(p, &target_cwd);
     }
+    crate::dismiss_transient_ui(&app, &state, &bubbles);
 }
