@@ -71,7 +71,8 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
     let window = builder.build();
 
     match window {
-        Ok(_) => {
+        Ok(window) => {
+            crate::macos_spaces::apply_space_follow(&window);
             bubbles.lock_or_recover().insert(id, BubbleEntry { data, measured_height: 200 });
             reposition_bubbles(app, bubbles);
             true

@@ -36,6 +36,11 @@ windows = { version = "0.58", features = [
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSWindow", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSNotification", "NSOperation", "NSString", "NSThread", "block2"] }
+
 [dev-dependencies]
 tempfile = "3"
 
