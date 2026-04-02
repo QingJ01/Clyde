@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import BubbleCard from './BubbleCard.svelte';
 
@@ -10,15 +10,25 @@
   let resizeObserver: ResizeObserver | null = null;
   let rootEl: HTMLDivElement | null = null;
 
+  function measureHeight() {
+    if (!rootEl) return;
+    const height = Math.ceil(Math.max(rootEl.scrollHeight, rootEl.getBoundingClientRect().height));
+    invoke('bubble_height_measured', { id: entryId, height });
+  }
+
   onMount(async () => {
     bubbleData = await invoke('get_bubble_data', { id: entryId });
+    await tick();
 
     if (bubbleData && rootEl) {
       resizeObserver = new ResizeObserver(([entry]) => {
-        const height = Math.ceil(entry.contentRect.height);
+        const shell = rootEl;
+        if (!shell) return;
+        const height = Math.ceil(Math.max(shell.scrollHeight, entry.contentRect.height));
         invoke('bubble_height_measured', { id: entryId, height });
       });
       resizeObserver.observe(rootEl);
+      measureHeight();
     }
   });
 
@@ -36,6 +46,10 @@
       toolInput={bubbleData.tool_input ?? {}}
       suggestions={bubbleData.suggestions ?? []}
       sessionId={bubbleData.session_id}
+      agentLabel={bubbleData.agent_label ?? 'Claude'}
+      sessionSummary={bubbleData.session_summary ?? ''}
+      sessionProject={bubbleData.session_project ?? ''}
+      sessionShortId={bubbleData.session_short_id ?? ''}
       isElicitation={bubbleData.is_elicitation ?? false}
       modeLabel={bubbleData.mode_label ?? ''}
       modeDescription={bubbleData.mode_description ?? ''}
@@ -47,7 +61,10 @@
 
 <style>
   :global(html, body) {
+    margin: 0;
+    padding: 0;
     background: transparent;
+    overflow: hidden;
   }
 
   .shell {

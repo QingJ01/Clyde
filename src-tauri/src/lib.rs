@@ -9,13 +9,14 @@ mod mini;
 mod permission;
 mod permission_mode;
 mod prefs;
+mod session_meta;
 mod state_machine;
 mod tick;
 mod tray;
 mod util;
 mod windows;
 
-use http_server::PendingPerms;
+use http_server::{ApprovalQueue, PendingPerms};
 use prefs::SharedPrefs;
 use serde::Serialize;
 use state_machine::{SharedState, StateMachine};
@@ -51,6 +52,9 @@ struct MenuSession {
     id: String,
     state: String,
     agent: String,
+    summary: String,
+    project: String,
+    short_id: String,
     pid: Option<u32>,
     updated_secs_ago: u64,
 }
@@ -83,6 +87,8 @@ type SharedDrag = Arc<Mutex<DragState>>;
 
 /// Minimum mouse distance (physical pixels) before a drag actually starts.
 const DRAG_THRESHOLD: f64 = 3.0;
+const STARTUP_MIN_VISIBLE: i32 = 120;
+const DISPLAY_REPAIR_DELAY_MS: u64 = 120;
 
 fn emit_snap_preview(app: &AppHandle, side: Option<mini::SnapSide>) {
     let side = side.map(|side| match side {
@@ -167,21 +173,6 @@ pub(crate) fn platform_limited_menu_label(
         label
     } else {
         format!("{label} ({})", i18n::t("macOnly", lang))
-    }
-}
-
-pub(crate) fn display_agent_label(agent: &str) -> String {
-    let normalized = agent.trim().to_ascii_lowercase();
-    if normalized.contains("claude") {
-        "Claude".into()
-    } else if normalized.contains("codex") {
-        "Codex".into()
-    } else if normalized.contains("copilot") {
-        "Copilot".into()
-    } else if agent.trim().is_empty() {
-        "Unknown".into()
-    } else {
-        agent.trim().into()
     }
 }
 
@@ -695,8 +686,8 @@ fn show_context_menu(
             session_items.push(Box::new(no));
         }
     } else {
-        for (sid, sess_state, _pid, agent, age_secs) in &sessions {
-            let icon = match sess_state.as_str() {
+        for session in &sessions {
+            let icon = match session.state.as_str() {
                 "working" | "typing" => "⚡",
                 "thinking" => "💭",
                 "juggling" => "🎪",
@@ -704,20 +695,39 @@ fn show_context_menu(
                 "sleeping" => "😴",
                 _ => "⚡",
             };
-            let state_label = match sess_state.as_str() {
+            let state_label = match session.state.as_str() {
                 "working" | "typing" => i18n::t("sessionWorking", &lang),
                 "thinking" => i18n::t("sessionThinking", &lang),
                 "juggling" => i18n::t("sessionJuggling", &lang),
                 "idle" => i18n::t("sessionIdle", &lang),
                 "sleeping" => i18n::t("sessionSleeping", &lang),
-                _ => sess_state.clone(),
+                _ => session.state.clone(),
             };
-            let agent_label = display_agent_label(agent);
-            let label = format!(
-                "{icon} {agent_label}  {state_label}  {}",
-                format_relative_time(*age_secs, &lang)
+            let display = session_meta::ensure_session_display_meta(
+                state.inner(),
+                &session.id,
+                Some(session.agent_id.as_str()),
+                if session.cwd.is_empty() {
+                    None
+                } else {
+                    Some(session.cwd.as_str())
+                },
             );
-            let item_id = format!("ctx-session-{}", sid);
+            let cached_summary = session.summary.trim();
+            let title = if !cached_summary.is_empty() {
+                cached_summary.to_string()
+            } else if display.summary.is_empty() {
+                format!("{} {}", display.agent_label, state_label)
+            } else {
+                display.summary.clone()
+            };
+            let mut meta_parts = vec![display.agent_label];
+            if !display.project.is_empty() {
+                meta_parts.push(display.project);
+            }
+            meta_parts.push(format_relative_time(session.updated_secs_ago, &lang));
+            let label = format!("{icon} {title}  {}", meta_parts.join(" · "));
+            let item_id = format!("ctx-session-{}", session.id);
             if let Ok(item) = MenuItem::with_id(&app, &item_id, &label, true, None::<&str>) {
                 session_items.push(Box::new(item));
             }
@@ -810,23 +820,38 @@ fn get_menu_data(
     prefs: tauri::State<'_, SharedPrefs>,
 ) -> MenuData {
     let prefs = prefs.lock_or_recover();
-    let sm = state.lock_or_recover();
-    let sessions = sm
-        .session_summaries()
+    let (sessions_raw, is_dnd) = {
+        let sm = state.lock_or_recover();
+        (sm.session_summaries(), sm.dnd)
+    };
+    let sessions = sessions_raw
         .into_iter()
-        .map(
-            |(id, session_state, pid, agent, updated_secs_ago)| MenuSession {
-                id,
-                state: session_state,
-                agent: display_agent_label(&agent),
-                pid,
-                updated_secs_ago,
-            },
-        )
+        .map(|session| {
+            let display = session_meta::ensure_session_display_meta(
+                state.inner(),
+                &session.id,
+                Some(session.agent_id.as_str()),
+                if session.cwd.is_empty() {
+                    None
+                } else {
+                    Some(session.cwd.as_str())
+                },
+            );
+            MenuSession {
+                id: session.id,
+                state: session.state,
+                agent: display.agent_label,
+                summary: display.summary,
+                project: display.project,
+                short_id: display.short_id,
+                pid: session.source_pid,
+                updated_secs_ago: session.updated_secs_ago,
+            }
+        })
         .collect();
     MenuData {
         sessions,
-        is_dnd: sm.dnd,
+        is_dnd,
         is_mini: prefs.mini_mode,
         lang: prefs.lang.clone(),
         size: prefs.size.clone(),
@@ -975,8 +1000,158 @@ fn is_left_mini(app: &AppHandle) -> bool {
 
 pub(crate) fn sync_hit(app: &AppHandle) {
     if let Some(bounds) = windows::get_pet_bounds(app) {
-        windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
+        sync_hit_for_bounds(app, &bounds);
     }
+}
+
+fn sync_hit_for_bounds(app: &AppHandle, bounds: &windows::WindowBounds) {
+    windows::sync_hit_window(app, bounds, &windows::HitBox::INTERACTIVE);
+}
+
+fn preferred_bounds_for_current_display(
+    app: &AppHandle,
+    prefs: &prefs::Prefs,
+) -> windows::WindowBounds {
+    let (width, height) = prefs::size_to_pixels(&prefs.size);
+    let mut x = prefs.x;
+    let mut y = prefs.y;
+
+    if let Some(monitors) = windows::available_monitor_areas(app) {
+        if monitors.len() == 1 {
+            if let Some(placement) = prefs.monitor_positions.get(&monitors[0].key) {
+                x = placement.x;
+                y = placement.y;
+            }
+        }
+    }
+
+    windows::WindowBounds {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+fn apply_pet_window_geometry(app: &AppHandle, bounds: &windows::WindowBounds) {
+    let Some(pet) = app.get_webview_window("pet") else {
+        return;
+    };
+
+    if let Some(current) = windows::get_pet_bounds(app) {
+        if current.width != bounds.width || current.height != bounds.height {
+            let _ = pet.set_size(tauri::PhysicalSize::new(bounds.width, bounds.height));
+        }
+        if current.x != bounds.x || current.y != bounds.y {
+            let _ = pet.set_position(PhysicalPosition::new(bounds.x, bounds.y));
+        }
+    } else {
+        let _ = pet.set_size(tauri::PhysicalSize::new(bounds.width, bounds.height));
+        let _ = pet.set_position(PhysicalPosition::new(bounds.x, bounds.y));
+    }
+}
+
+fn persist_pet_bounds(app: &AppHandle, bounds: &windows::WindowBounds) {
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return;
+    };
+    let mut prefs = prefs_state.lock_or_recover();
+    if prefs.mini_mode {
+        return;
+    }
+    prefs.x = bounds.x;
+    prefs.y = bounds.y;
+    if let Some(monitor) = windows::monitor_for_bounds(app, bounds) {
+        let placement = prefs.monitor_positions.entry(monitor.key).or_default();
+        placement.x = bounds.x;
+        placement.y = bounds.y;
+    }
+    prefs::save(app, &prefs);
+}
+
+fn drag_in_progress(app: &AppHandle) -> bool {
+    app.try_state::<SharedDrag>()
+        .map(|drag| {
+            let drag = drag.lock_or_recover();
+            drag.active || drag.dragging
+        })
+        .unwrap_or(false)
+}
+
+fn should_restore_saved_single_monitor_position(
+    current: &windows::WindowBounds,
+    monitor: &windows::MonitorArea,
+    saved: &prefs::MonitorPlacement,
+) -> bool {
+    let near_left = (current.x - monitor.x).abs() <= 36;
+    let near_top = (current.y - monitor.y).abs() <= 36;
+    let saved_far_x = (saved.x - current.x).abs() >= 80;
+    let saved_far_y = (saved.y - current.y).abs() >= 80;
+    (near_left || near_top) && (saved_far_x || saved_far_y)
+}
+
+fn reconcile_pet_geometry(app: &AppHandle) {
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        sync_hit(app);
+        return;
+    };
+    let prefs_snapshot = prefs_state.lock_or_recover().clone();
+    let mut target = preferred_bounds_for_current_display(app, &prefs_snapshot);
+
+    if let Some(current_bounds) = windows::get_pet_bounds(app) {
+        target.x = current_bounds.x;
+        target.y = current_bounds.y;
+
+        if let Some(monitors) = windows::available_monitor_areas(app) {
+            if monitors.len() == 1 {
+                if let Some(placement) = prefs_snapshot.monitor_positions.get(&monitors[0].key) {
+                    if should_restore_saved_single_monitor_position(
+                        &current_bounds,
+                        &monitors[0],
+                        placement,
+                    ) {
+                        target.x = placement.x;
+                        target.y = placement.y;
+                    }
+                }
+            }
+        }
+    } else if let Some(monitors) = windows::available_monitor_areas(app) {
+        if monitors.len() == 1 {
+            if let Some(placement) = prefs_snapshot.monitor_positions.get(&monitors[0].key) {
+                target.x = placement.x;
+                target.y = placement.y;
+            }
+        }
+    }
+
+    let (resolved_x, resolved_y) =
+        windows::startup_position_for_bounds(app, &target, STARTUP_MIN_VISIBLE);
+    let resolved = windows::WindowBounds {
+        x: resolved_x,
+        y: resolved_y,
+        width: target.width,
+        height: target.height,
+    };
+
+    apply_pet_window_geometry(app, &resolved);
+    sync_hit_for_bounds(app, &resolved);
+    persist_pet_bounds(app, &resolved);
+
+    if let Some(bubbles) = app.try_state::<permission::BubbleMap>() {
+        permission::reposition_bubbles(app, &bubbles);
+    }
+}
+
+fn schedule_display_repair(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(DISPLAY_REPAIR_DELAY_MS)).await;
+        if drag_in_progress(&app) {
+            sync_hit(&app);
+            return;
+        }
+        reconcile_pet_geometry(&app);
+    });
 }
 
 /// Shared pipeline: lock state → update session → resolve → emit.
@@ -1226,36 +1401,65 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
     }
 }
 
-fn setup_pet_window(app: &AppHandle, prefs: &prefs::Prefs) {
+fn setup_pet_window(app: &AppHandle, prefs: &prefs::Prefs) -> Option<windows::WindowBounds> {
     let Some(pet) = app.get_webview_window("pet") else {
         eprintln!("Clyde: pet window not found!");
-        return;
+        return None;
     };
+    let desired_bounds = preferred_bounds_for_current_display(app, prefs);
+    let (w, h) = (desired_bounds.width, desired_bounds.height);
+    let (resolved_x, resolved_y) =
+        windows::startup_position_for_bounds(app, &desired_bounds, STARTUP_MIN_VISIBLE);
+    let resolved_bounds = windows::WindowBounds {
+        x: resolved_x,
+        y: resolved_y,
+        width: w,
+        height: h,
+    };
+
+    if (resolved_x, resolved_y) != (prefs.x, prefs.y) {
+        if let Some(shared_prefs) = app.try_state::<SharedPrefs>() {
+            let mut saved = shared_prefs.lock_or_recover();
+            saved.x = resolved_x;
+            saved.y = resolved_y;
+            if let Some(monitor) = windows::monitor_for_bounds(app, &resolved_bounds) {
+                let placement = saved.monitor_positions.entry(monitor.key).or_default();
+                placement.x = resolved_x;
+                placement.y = resolved_y;
+            }
+            prefs::save(app, &saved);
+        }
+    }
+
     if let Err(e) = pet.set_background_color(Some(Color(0, 0, 0, 0))) {
         eprintln!("Clyde: set_background_color failed: {e}");
     }
     let _ = pet.set_ignore_cursor_events(true);
-    let _ = pet.set_position(PhysicalPosition::new(prefs.x, prefs.y));
-    let (w, h) = prefs::size_to_pixels(&prefs.size);
-    let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
+    apply_pet_window_geometry(app, &resolved_bounds);
     if let Err(e) = pet.show() {
         eprintln!("Clyde: pet.show() failed: {e}");
     }
     emit_pet_config(app, prefs);
     println!(
         "Clyde: pet window shown ({}x{}) at ({},{})",
-        w, h, prefs.x, prefs.y
+        w, h, resolved_x, resolved_y
     );
     #[cfg(debug_assertions)]
     pet.open_devtools();
+    Some(resolved_bounds)
 }
 
-fn setup_hit_window(app: &AppHandle) {
+fn setup_hit_window(app: &AppHandle, initial_bounds: Option<&windows::WindowBounds>) {
     if let Some(hit) = app.get_webview_window("hit") {
         let _ = hit.set_background_color(Some(Color(0, 0, 0, 0)));
     }
-    if let Some(bounds) = windows::get_pet_bounds(app) {
-        windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
+    let fallback_bounds = if initial_bounds.is_none() {
+        windows::get_pet_bounds(app)
+    } else {
+        None
+    };
+    if let Some(bounds) = initial_bounds.or(fallback_bounds.as_ref()) {
+        sync_hit_for_bounds(app, bounds);
         println!("Clyde: hit window synced to pet bounds");
     } else {
         eprintln!("Clyde: could not get pet bounds for hit window sync");
@@ -1312,6 +1516,8 @@ pub fn run() {
     }));
     let shared_state: SharedState = Arc::new(Mutex::new(StateMachine::new()));
     let pending_perms: PendingPerms = Arc::new(Mutex::new(HashMap::new()));
+    let approval_queue: ApprovalQueue =
+        Arc::new(Mutex::new(http_server::ApprovalQueueState::default()));
     let shared_prefs: SharedPrefs = Arc::new(Mutex::new(prefs::Prefs::default()));
     let sleep_abort: SleepAbortHandle = Arc::new(Mutex::new(None));
     let bubble_map: permission::BubbleMap = Arc::new(Mutex::new(HashMap::new()));
@@ -1323,6 +1529,7 @@ pub fn run() {
         .manage(drag_state)
         .manage(shared_state.clone())
         .manage(pending_perms.clone())
+        .manage(approval_queue.clone())
         .manage(shared_prefs.clone())
         .manage(sleep_abort.clone())
         .manage(bubble_map.clone())
@@ -1347,22 +1554,26 @@ pub fn run() {
             *shared_prefs.lock_or_recover() = prefs.clone();
             sync_autostart_pref(prefs.auto_start_with_claude);
 
-            setup_pet_window(app.handle(), &prefs);
-            setup_hit_window(app.handle());
+            let initial_bounds = setup_pet_window(app.handle(), &prefs);
+            setup_hit_window(app.handle(), initial_bounds.as_ref());
             setup_tray(app.handle(), &prefs, &shared_tray);
 
             // Save position on close
             if let Some(pet_win) = app.get_webview_window("pet") {
                 let handle_for_close = app.handle().clone();
-                let shared_prefs_for_close = shared_prefs.clone();
                 pet_win.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { .. } = event {
-                        if let Some(bounds) = windows::get_pet_bounds(&handle_for_close) {
-                            let mut p = shared_prefs_for_close.lock_or_recover();
-                            p.x = bounds.x;
-                            p.y = bounds.y;
-                            prefs::save(&handle_for_close, &p);
+                    match event {
+                        tauri::WindowEvent::CloseRequested { .. } => {
+                            if let Some(bounds) = windows::get_pet_bounds(&handle_for_close) {
+                                persist_pet_bounds(&handle_for_close, &bounds);
+                            }
                         }
+                        tauri::WindowEvent::Moved(_)
+                        | tauri::WindowEvent::Resized(_)
+                        | tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                            schedule_display_repair(handle_for_close.clone());
+                        }
+                        _ => {}
                     }
                 });
             }
@@ -1372,11 +1583,21 @@ pub fn run() {
                 let handle = app.handle().clone();
                 let state_clone = shared_state.clone();
                 let perms_clone = pending_perms.clone();
+                let approval_queue_clone = approval_queue.clone();
                 let bubbles_clone = bubble_map.clone();
                 let mode_clone = mode_tracker.clone();
                 let auto_start_enabled = prefs.auto_start_with_claude;
                 tauri::async_runtime::spawn(async move {
-                    match http_server::start_server(handle.clone(), state_clone, perms_clone, bubbles_clone, mode_clone).await {
+                    match http_server::start_server(
+                        handle.clone(),
+                        state_clone,
+                        perms_clone,
+                        approval_queue_clone,
+                        bubbles_clone,
+                        mode_clone,
+                    )
+                    .await
+                    {
                         Some(port) => {
                             let installer = hooks::HookInstaller {
                                 settings_path: None,

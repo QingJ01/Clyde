@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "demo:permissions": "bash scripts/demo-permissions.sh queue",
     "tauri": "tauri",
     "start": "tauri dev",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml && node --test hooks/tests/install-permission-request.test.cjs",

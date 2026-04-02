@@ -1,6 +1,7 @@
 use std::future::IntoFuture;
 
 use crate::permission;
+use crate::session_meta;
 use crate::state_machine::{SharedState, ONESHOT_STATES};
 use crate::util::MutexExt;
 use axum::{
@@ -11,7 +12,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use tokio::sync::oneshot;
@@ -22,6 +23,7 @@ pub const DEFAULT_PORT: u16 = 23333;
 
 pub type PermSender = oneshot::Sender<PermDecision>;
 pub type PendingPerms = Arc<Mutex<HashMap<String, PermSender>>>;
+pub type ApprovalQueue = Arc<Mutex<ApprovalQueueState>>;
 
 #[derive(Debug, Clone)]
 pub enum PermDecision {
@@ -30,10 +32,18 @@ pub enum PermDecision {
     AllowWithPermissions(Vec<serde_json::Value>),
 }
 
+#[derive(Default)]
+pub struct ApprovalQueueState {
+    active_request_id: Option<String>,
+    queued_request_ids: VecDeque<String>,
+    request_data: HashMap<String, permission::BubbleData>,
+}
+
 #[derive(Clone)]
 struct ServerCtx {
     state: SharedState,
     pending_perms: PendingPerms,
+    approval_queue: ApprovalQueue,
     app: AppHandle,
     bubble_map: permission::BubbleMap,
     mode_tracker: crate::permission_mode::ModeTracker,
@@ -50,6 +60,14 @@ struct StatePayload {
     cwd: Option<String>,
     agent_id: Option<String>,
     permission_mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ClearPermissionPayload {
+    #[serde(default)]
+    session_ids: Vec<String>,
+    #[serde(default)]
+    demo_only: bool,
 }
 
 // NOTE: We accept raw JSON for permission requests because Claude Code's
@@ -189,9 +207,60 @@ async fn post_permission(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    let agent_label_override = payload
+        .get("agent_label")
+        .or_else(|| payload.get("agentLabel"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let session_summary_override = payload
+        .get("session_summary")
+        .or_else(|| payload.get("sessionSummary"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let session_project_override = payload
+        .get("session_project")
+        .or_else(|| payload.get("sessionProject"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let session_short_id_override = payload
+        .get("session_short_id")
+        .or_else(|| payload.get("sessionShortId"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let fallback_agent = payload
+        .get("agent_id")
+        .or_else(|| payload.get("agentId"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "claude-code".to_string());
+    let fallback_cwd = session_meta::extract_tool_cwd(&tool_input);
+    let display = session_meta::ensure_session_display_meta(
+        &ctx.state,
+        &session_id,
+        Some(fallback_agent.as_str()),
+        fallback_cwd.as_deref(),
+    );
+    let agent_label = agent_label_override.unwrap_or(display.agent_label);
+    let raw_session_summary = session_summary_override.unwrap_or(display.summary);
+    let session_summary = session_meta::clean_resume_summary(&raw_session_summary);
+    let session_project = session_project_override.unwrap_or(display.project);
+    let session_short_id = session_short_id_override.unwrap_or(display.short_id);
 
     let entry_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel::<PermDecision>();
+    ctx.pending_perms
+        .lock_or_recover()
+        .insert(entry_id.clone(), tx);
 
     let bubble_data = permission::BubbleData {
         id: entry_id.clone(),
@@ -200,23 +269,23 @@ async fn post_permission(
         tool_input,
         suggestions,
         session_id,
+        agent_label,
+        session_summary,
+        session_project,
+        session_short_id,
         is_elicitation: false,
         mode_label: None,
         mode_description: None,
     };
     let bubble_session_id = bubble_data.session_id.clone();
 
-    let bubble_opened = permission::show_bubble(&ctx.app, &ctx.bubble_map, bubble_data);
-    if !bubble_opened {
+    if !enqueue_permission_request(&ctx, bubble_data) {
         return (
             StatusCode::OK,
             headers,
             Json(perm_response(&PermDecision::Deny)),
         );
     }
-    ctx.pending_perms
-        .lock_or_recover()
-        .insert(entry_id.clone(), tx);
 
     // Wait for user to click in bubble, or timeout.
     // Auto-close: a background watcher (see spawn below) checks if the HTTP client
@@ -267,7 +336,13 @@ async fn post_permission(
         {
             let _ = tx.send(PermDecision::Deny);
         }
-        permission::close_bubble(&watchdog_ctx.app, &watchdog_ctx.bubble_map, &watchdog_id);
+        close_permission_request_ui(
+            &watchdog_ctx.app,
+            &watchdog_ctx.pending_perms,
+            &watchdog_ctx.approval_queue,
+            &watchdog_ctx.bubble_map,
+            &watchdog_id,
+        );
     });
 
     let decision = rx.await.unwrap_or(PermDecision::Deny);
@@ -275,9 +350,189 @@ async fn post_permission(
     // Clean up
     watchdog.abort();
     ctx.pending_perms.lock_or_recover().remove(&entry_id);
-    permission::close_bubble(&ctx.app, &ctx.bubble_map, &entry_id);
+    close_permission_request_ui(
+        &ctx.app,
+        &ctx.pending_perms,
+        &ctx.approval_queue,
+        &ctx.bubble_map,
+        &entry_id,
+    );
 
     (StatusCode::OK, headers, Json(perm_response(&decision)))
+}
+
+async fn clear_permission_debug(
+    AxumState(ctx): AxumState<ServerCtx>,
+    Json(payload): Json<ClearPermissionPayload>,
+) -> (StatusCode, HeaderMap, Json<Value>) {
+    let mut headers = HeaderMap::new();
+    headers.insert(CLYDE_SERVER_HEADER, CLYDE_SERVER_ID.parse().unwrap());
+
+    let ids: Vec<String> = {
+        let queue = ctx.approval_queue.lock_or_recover();
+        queue
+            .request_data
+            .iter()
+            .filter(|(_, data)| {
+                (!payload.session_ids.is_empty()
+                    && payload
+                        .session_ids
+                        .iter()
+                        .any(|sid| sid == &data.session_id))
+                    || (payload.demo_only && data.session_id.contains("-demo-"))
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+
+    for id in &ids {
+        cancel_permission_request(
+            &ctx.app,
+            &ctx.pending_perms,
+            &ctx.approval_queue,
+            &ctx.bubble_map,
+            id,
+        );
+    }
+
+    (
+        StatusCode::OK,
+        headers,
+        Json(json!({
+            "ok": true,
+            "cleared": ids.len(),
+        })),
+    )
+}
+
+fn enqueue_permission_request(ctx: &ServerCtx, bubble_data: permission::BubbleData) -> bool {
+    let entry_id = bubble_data.id.clone();
+    let should_show_now = {
+        let mut queue = ctx.approval_queue.lock_or_recover();
+        queue
+            .request_data
+            .insert(entry_id.clone(), bubble_data.clone());
+        if queue.active_request_id.is_none() {
+            queue.active_request_id = Some(entry_id);
+            true
+        } else {
+            queue.queued_request_ids.push_back(bubble_data.id.clone());
+            false
+        }
+    };
+
+    if should_show_now {
+        show_permission_or_deny(
+            &ctx.app,
+            &ctx.pending_perms,
+            &ctx.approval_queue,
+            &ctx.bubble_map,
+            bubble_data,
+        )
+    } else {
+        true
+    }
+}
+
+fn show_permission_or_deny(
+    app: &AppHandle,
+    pending_perms: &PendingPerms,
+    approval_queue: &ApprovalQueue,
+    bubble_map: &permission::BubbleMap,
+    bubble_data: permission::BubbleData,
+) -> bool {
+    if permission::show_bubble(app, bubble_map, bubble_data.clone()) {
+        return true;
+    }
+
+    if let Some(tx) = pending_perms.lock_or_recover().remove(&bubble_data.id) {
+        let _ = tx.send(PermDecision::Deny);
+    }
+
+    {
+        let mut queue = approval_queue.lock_or_recover();
+        queue.request_data.remove(&bubble_data.id);
+        if queue.active_request_id.as_deref() == Some(bubble_data.id.as_str()) {
+            queue.active_request_id = None;
+        } else {
+            queue
+                .queued_request_ids
+                .retain(|queued_id| queued_id != &bubble_data.id);
+        }
+    }
+
+    activate_next_permission(app, pending_perms, approval_queue, bubble_map);
+    false
+}
+
+fn close_permission_request_ui(
+    app: &AppHandle,
+    pending_perms: &PendingPerms,
+    approval_queue: &ApprovalQueue,
+    bubble_map: &permission::BubbleMap,
+    id: &str,
+) {
+    let was_active = {
+        let mut queue = approval_queue.lock_or_recover();
+        queue.request_data.remove(id);
+        if queue.active_request_id.as_deref() == Some(id) {
+            queue.active_request_id = None;
+            true
+        } else {
+            queue.queued_request_ids.retain(|queued_id| queued_id != id);
+            false
+        }
+    };
+
+    permission::close_bubble(app, bubble_map, id);
+
+    if was_active {
+        activate_next_permission(app, pending_perms, approval_queue, bubble_map);
+    }
+}
+
+fn cancel_permission_request(
+    app: &AppHandle,
+    pending_perms: &PendingPerms,
+    approval_queue: &ApprovalQueue,
+    bubble_map: &permission::BubbleMap,
+    id: &str,
+) {
+    if let Some(tx) = pending_perms.lock_or_recover().remove(id) {
+        let _ = tx.send(PermDecision::Deny);
+    }
+    close_permission_request_ui(app, pending_perms, approval_queue, bubble_map, id);
+}
+
+fn activate_next_permission(
+    app: &AppHandle,
+    pending_perms: &PendingPerms,
+    approval_queue: &ApprovalQueue,
+    bubble_map: &permission::BubbleMap,
+) {
+    loop {
+        let next_bubble = {
+            let mut queue = approval_queue.lock_or_recover();
+            let next_id = match queue.queued_request_ids.pop_front() {
+                Some(id) => id,
+                None => {
+                    queue.active_request_id = None;
+                    return;
+                }
+            };
+            match queue.request_data.get(&next_id).cloned() {
+                Some(data) => {
+                    queue.active_request_id = Some(next_id);
+                    data
+                }
+                None => continue,
+            }
+        };
+
+        if show_permission_or_deny(app, pending_perms, approval_queue, bubble_map, next_bubble) {
+            return;
+        }
+    }
 }
 
 /// Build the response format Claude Code expects for PermissionRequest HTTP hooks.
@@ -302,12 +557,14 @@ pub async fn start_server(
     app: AppHandle,
     state: SharedState,
     pending_perms: PendingPerms,
+    approval_queue: ApprovalQueue,
     bubble_map: permission::BubbleMap,
     mode_tracker: crate::permission_mode::ModeTracker,
 ) -> Option<u16> {
     let ctx = ServerCtx {
         state,
         pending_perms,
+        approval_queue,
         app,
         bubble_map,
         mode_tracker,
@@ -317,6 +574,7 @@ pub async fn start_server(
         .route("/state", get(health))
         .route("/state", post(post_state))
         .route("/permission", post(post_permission))
+        .route("/permission/debug/clear", post(clear_permission_debug))
         .with_state(ctx);
 
     for port in DEFAULT_PORT..DEFAULT_PORT + 7 {
@@ -362,6 +620,7 @@ fn write_runtime_port(port: u16) {
 pub fn resolve_permission(
     app: tauri::AppHandle,
     pending: tauri::State<PendingPerms>,
+    approval_queue: tauri::State<ApprovalQueue>,
     bubbles: tauri::State<permission::BubbleMap>,
     id: String,
     decision: String,
@@ -376,8 +635,7 @@ pub fn resolve_permission(
         };
         let _ = tx.send(perm_decision);
     }
-    // Close the bubble window — Rust owns window lifecycle (CRITICAL-1)
-    permission::close_bubble(&app, &bubbles, &id);
+    close_permission_request_ui(&app, &pending, &approval_queue, &bubbles, &id);
 }
 
 #[cfg(test)]

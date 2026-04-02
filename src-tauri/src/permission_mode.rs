@@ -164,6 +164,21 @@ pub fn get_session_mode(tracker: &ModeTracker, session_id: &str) -> Option<Permi
 
 /// Create a mode_notice bubble window.
 fn trigger_mode_notice(app: &AppHandle, _session_id: &str, mode: &PermissionMode, lang: &str) {
+    let display = app
+        .try_state::<crate::state_machine::SharedState>()
+        .map(|state| {
+            crate::session_meta::ensure_session_display_meta(
+                state.inner(),
+                _session_id,
+                Some("claude-code"),
+                None,
+            )
+        })
+        .unwrap_or_else(|| crate::session_meta::SessionDisplayMeta {
+            agent_label: crate::session_meta::display_agent_label("claude-code"),
+            short_id: crate::session_meta::short_session_id(_session_id),
+            ..Default::default()
+        });
     let bubble_data = crate::permission::BubbleData {
         id: uuid::Uuid::new_v4().to_string(),
         window_kind: crate::permission::WindowKind::ModeNotice,
@@ -171,6 +186,10 @@ fn trigger_mode_notice(app: &AppHandle, _session_id: &str, mode: &PermissionMode
         tool_input: serde_json::Value::Null,
         suggestions: vec![],
         session_id: _session_id.to_string(),
+        agent_label: display.agent_label,
+        session_summary: display.summary,
+        session_project: display.project,
+        session_short_id: display.short_id,
         is_elicitation: false,
         mode_label: Some(format!("{} {}", mode.icon(), mode.label(lang))),
         mode_description: Some(mode.description(lang).to_string()),

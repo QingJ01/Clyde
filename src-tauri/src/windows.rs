@@ -88,6 +88,27 @@ pub fn compute_hit_rect(bounds: &WindowBounds, hb: &HitBox) -> HitRect {
     }
 }
 
+fn interactive_rect(bounds: &WindowBounds) -> HitRect {
+    HitRect {
+        left: bounds.x as f64,
+        top: bounds.y as f64,
+        right: (bounds.x + bounds.width as i32) as f64,
+        bottom: (bounds.y + bounds.height as i32) as f64,
+    }
+}
+
+fn sync_rect_for_hitbox(bounds: &WindowBounds, hb: &HitBox) -> HitRect {
+    if hb.x == HitBox::INTERACTIVE.x
+        && hb.y == HitBox::INTERACTIVE.y
+        && hb.w == HitBox::INTERACTIVE.w
+        && hb.h == HitBox::INTERACTIVE.h
+    {
+        interactive_rect(bounds)
+    } else {
+        compute_hit_rect(bounds, hb)
+    }
+}
+
 pub fn monitor_key(monitor: &Monitor) -> String {
     if let Some(name) = monitor.name().filter(|name| !name.is_empty()) {
         return name.clone();
@@ -130,18 +151,19 @@ fn rect_center_distance_sq(a: &WindowBounds, b: &MonitorArea) -> i64 {
 }
 
 pub fn monitor_for_bounds(app: &AppHandle, bounds: &WindowBounds) -> Option<MonitorArea> {
+    let monitors = available_monitor_areas(app)?;
+    best_monitor_for_bounds(bounds, &monitors).cloned()
+}
+
+pub fn available_monitor_areas(app: &AppHandle) -> Option<Vec<MonitorArea>> {
     let pet = app.get_webview_window("pet")?;
     let monitors = pet.available_monitors().ok()?;
-    monitors
-        .into_iter()
-        .map(|monitor| monitor_area(&monitor))
-        .max_by(|a, b| {
-            let area_a = rect_intersection_area(bounds, a);
-            let area_b = rect_intersection_area(bounds, b);
-            area_a.cmp(&area_b).then_with(|| {
-                rect_center_distance_sq(bounds, b).cmp(&rect_center_distance_sq(bounds, a))
-            })
-        })
+    Some(
+        monitors
+            .into_iter()
+            .map(|monitor| monitor_area(&monitor))
+            .collect(),
+    )
 }
 
 pub fn current_monitor_for_pet(app: &AppHandle) -> Option<MonitorArea> {
@@ -151,6 +173,59 @@ pub fn current_monitor_for_pet(app: &AppHandle) -> Option<MonitorArea> {
         }
     }
     get_pet_bounds(app).and_then(|bounds| monitor_for_bounds(app, &bounds))
+}
+
+fn best_monitor_for_bounds<'a>(
+    bounds: &WindowBounds,
+    monitors: &'a [MonitorArea],
+) -> Option<&'a MonitorArea> {
+    monitors.iter().max_by(|a, b| {
+        let area_a = rect_intersection_area(bounds, a);
+        let area_b = rect_intersection_area(bounds, b);
+        area_a.cmp(&area_b).then_with(|| {
+            rect_center_distance_sq(bounds, b).cmp(&rect_center_distance_sq(bounds, a))
+        })
+    })
+}
+
+pub fn center_window_in_monitor(width: u32, height: u32, monitor: &MonitorArea) -> (i32, i32) {
+    let x = monitor.x + ((monitor.width as i32 - width as i32).max(0) / 2);
+    let y = monitor.y + ((monitor.height as i32 - height as i32).max(0) / 2);
+    (x, y)
+}
+
+pub fn startup_position_with_monitors(
+    bounds: &WindowBounds,
+    monitors: &[MonitorArea],
+    min_visible: i32,
+) -> (i32, i32) {
+    let Some(monitor) = best_monitor_for_bounds(bounds, monitors) else {
+        return (bounds.x, bounds.y);
+    };
+
+    if rect_intersection_area(bounds, monitor) > 0 {
+        clamp_window_to_monitor(
+            bounds.x,
+            bounds.y,
+            bounds.width,
+            bounds.height,
+            monitor,
+            min_visible,
+        )
+    } else {
+        center_window_in_monitor(bounds.width, bounds.height, monitor)
+    }
+}
+
+pub fn startup_position_for_bounds(
+    app: &AppHandle,
+    bounds: &WindowBounds,
+    min_visible: i32,
+) -> (i32, i32) {
+    let Some(monitors) = available_monitor_areas(app) else {
+        return (bounds.x, bounds.y);
+    };
+    startup_position_with_monitors(bounds, &monitors, min_visible)
 }
 
 pub fn clamp_window_to_monitor(
@@ -184,7 +259,7 @@ pub fn sync_hit_window(app: &AppHandle, pet_bounds: &WindowBounds, hb: &HitBox) 
         Some(w) => w,
         None => return,
     };
-    let rect = compute_hit_rect(pet_bounds, hb);
+    let rect = sync_rect_for_hitbox(pet_bounds, hb);
     let mut x = rect.left.round() as i32;
     let mut y = rect.top.round() as i32;
     let mut w = (rect.right - rect.left).round() as i32;
@@ -302,23 +377,11 @@ mod tests {
             width: 200,
             height: 200,
         };
-        let rect = compute_hit_rect(&bounds, &HitBox::INTERACTIVE);
-        assert!(
-            rect.left <= 5.0,
-            "interactive hit area should start near left edge"
-        );
-        assert!(
-            rect.top <= 5.0,
-            "interactive hit area should start near top edge"
-        );
-        assert!(
-            rect.right >= 195.0,
-            "interactive hit area should reach near right edge"
-        );
-        assert!(
-            rect.bottom >= 195.0,
-            "interactive hit area should reach near bottom edge"
-        );
+        let rect = sync_rect_for_hitbox(&bounds, &HitBox::INTERACTIVE);
+        assert_eq!(rect.left, 0.0);
+        assert_eq!(rect.top, 0.0);
+        assert_eq!(rect.right, 200.0);
+        assert_eq!(rect.bottom, 200.0);
     }
 
     #[test]
@@ -333,6 +396,20 @@ mod tests {
         let (x, y) = clamp_window_to_monitor(3900, 100, 200, 200, &monitor, 30);
         assert_eq!(x, 3810);
         assert_eq!(y, 100);
+    }
+
+    #[test]
+    fn test_center_window_in_monitor_uses_monitor_origin() {
+        let monitor = MonitorArea {
+            key: "secondary".into(),
+            x: 1920,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let (x, y) = center_window_in_monitor(360, 360, &monitor);
+        assert_eq!(x, 2700);
+        assert_eq!(y, 360);
     }
 
     #[test]
@@ -358,5 +435,54 @@ mod tests {
             height: 1080,
         };
         assert!(rect_intersection_area(&bounds, &right) > rect_intersection_area(&bounds, &left));
+    }
+
+    #[test]
+    fn test_startup_position_centers_when_saved_bounds_are_offscreen() {
+        let bounds = WindowBounds {
+            x: 5000,
+            y: 120,
+            width: 360,
+            height: 360,
+        };
+        let monitors = vec![
+            MonitorArea {
+                key: "left".into(),
+                x: 0,
+                y: 0,
+                width: 1512,
+                height: 982,
+            },
+            MonitorArea {
+                key: "right".into(),
+                x: 1512,
+                y: 0,
+                width: 2560,
+                height: 1440,
+            },
+        ];
+        let (x, y) = startup_position_with_monitors(&bounds, &monitors, 120);
+        assert_eq!(x, 2612);
+        assert_eq!(y, 540);
+    }
+
+    #[test]
+    fn test_startup_position_clamps_when_bounds_are_still_partially_visible() {
+        let bounds = WindowBounds {
+            x: 1400,
+            y: 40,
+            width: 360,
+            height: 360,
+        };
+        let monitors = vec![MonitorArea {
+            key: "main".into(),
+            x: 0,
+            y: 0,
+            width: 1512,
+            height: 982,
+        }];
+        let (x, y) = startup_position_with_monitors(&bounds, &monitors, 120);
+        assert_eq!(x, 1392);
+        assert_eq!(y, 40);
     }
 }

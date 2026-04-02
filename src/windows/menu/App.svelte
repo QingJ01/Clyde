@@ -7,6 +7,9 @@
     id: string;
     state: string;
     agent: string;
+    summary: string;
+    project: string;
+    short_id: string;
     pid: number | null;
     updated_secs_ago: number;
   }
@@ -47,16 +50,20 @@
     if (!data) return key;
     const zh: Record<string, string> = {
       size: '大小', miniMode: '极简模式', dnd: '勿扰模式',
+      restoreInteraction: '恢复交互',
       opacity: '透明度', lockPosition: '锁定位置', clickThrough: '点击穿透',
       hideOnFullscreen: '全屏时自动隐藏', autoDndMeetings: '会议/共享时自动勿扰',
       autoStart: '随 Claude Code 启动', sessions: '会话', language: '语言', quit: '退出',
+      clickThroughHint: '开启后可从托盘菜单的“恢复交互”关闭',
       noSessions: '没有活跃会话', justNow: '刚刚', macOnly: '仅 macOS',
     };
     const en: Record<string, string> = {
       size: 'Size', miniMode: 'Mini Mode', dnd: 'Sleep (Do Not Disturb)',
+      restoreInteraction: 'Restore Interaction',
       opacity: 'Opacity', lockPosition: 'Lock Position', clickThrough: 'Click Through',
       hideOnFullscreen: 'Hide on Fullscreen', autoDndMeetings: 'Auto DND During Meetings',
       autoStart: 'Start with Claude Code', sessions: 'Sessions', language: 'Language', quit: 'Quit',
+      clickThroughHint: 'Turn it off from the tray menu with Restore Interaction',
       noSessions: 'No active sessions', justNow: 'just now', macOnly: 'macOS only',
     };
     return (data.lang === 'zh' ? zh[key] : en[key]) ?? key;
@@ -190,6 +197,16 @@
     {#if data.click_through}<span class="check">✓</span>{/if}
   </button>
 
+  {#if !data.click_through}
+    <div class="hint">{t('clickThroughHint')}</div>
+  {/if}
+
+  {#if data.click_through || data.position_locked}
+    <button class="item restore" onclick={() => action('restore-interaction')}>
+      <span>{t('restoreInteraction')}</span>
+    </button>
+  {/if}
+
   <button
     class="item"
     class:disabled={!data.environment_controls_supported}
@@ -236,9 +253,16 @@
             {@const meta = agentMeta(sess.agent)}
             <button class="item session-item" onclick={() => action(`session-${sess.id}`)}>
               <span class="session-icon">{stateIcons[sess.state] ?? '⚡'}</span>
-              <span class={`session-agent agent-${meta.kind}`}>{meta.label}</span>
-              <span class="session-state">{stateLabel(sess.state)}</span>
-              <span class="session-time">{sessionAgeLabel(sess.updated_secs_ago)}</span>
+              <span class="session-copy">
+                <span class="session-title">{sess.summary || stateLabel(sess.state)}</span>
+                <span class="session-meta">
+                  <span class={`session-agent agent-${meta.kind}`}>{meta.label}</span>
+                  {#if sess.project}<span>{sess.project}</span>{/if}
+                  {#if sess.short_id}<span>{sess.short_id}</span>{/if}
+                  <span>{stateLabel(sess.state)}</span>
+                  <span>{sessionAgeLabel(sess.updated_secs_ago)}</span>
+                </span>
+              </span>
             </button>
           {/each}
         {/if}
@@ -320,6 +344,10 @@
   .item.quit {
     color: #e53e3e;
   }
+  .item.restore {
+    color: #0f766e;
+    font-weight: 600;
+  }
   .item.checked::after {
     content: '✓';
     font-size: 12px;
@@ -351,6 +379,14 @@
     margin: 4px 10px;
   }
 
+  .hint {
+    padding: 4px 14px 8px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: #6b7280;
+    letter-spacing: -0.01em;
+  }
+
   .has-sub {
     cursor: default;
   }
@@ -373,12 +409,37 @@
   }
 
   .submenu-sessions {
-    min-width: 260px;
+    min-width: 320px;
   }
 
   .session-item {
     gap: 8px;
     justify-content: flex-start;
+    align-items: flex-start;
+  }
+  .session-copy {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .session-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #1d1d1f;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .session-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: #6b7280;
   }
   .session-icon {
     font-size: 14px;
@@ -389,7 +450,6 @@
   .session-agent {
     display: inline-flex;
     align-items: center;
-    min-width: 58px;
     padding: 3px 8px;
     border-radius: 999px;
     font-weight: 600;
@@ -414,13 +474,7 @@
     background: rgba(96, 165, 250, 0.18);
     border-color: rgba(59, 130, 246, 0.2);
   }
-  .session-state {
-    font-size: 12px;
-    color: #666;
-  }
-  .session-time {
-    font-size: 11px;
-    color: #aaa;
-    margin-left: auto;
+  .session-meta span:not(.session-agent) {
+    white-space: nowrap;
   }
 </style>

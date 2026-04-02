@@ -13,6 +13,25 @@ use tauri::{
 
 pub type SharedTray = Arc<Mutex<Option<TrayIcon>>>;
 
+fn restore_interaction_label(lang: &str, click_through: bool, locked: bool) -> String {
+    let base = t("restoreInteraction", lang);
+    if lang == "zh" {
+        match (click_through, locked) {
+            (true, true) => format!("{base}（关闭穿透/锁定）"),
+            (true, false) => format!("{base}（关闭穿透）"),
+            (false, true) => format!("{base}（关闭锁定）"),
+            (false, false) => base,
+        }
+    } else {
+        match (click_through, locked) {
+            (true, true) => format!("{base} (disable click through / lock)"),
+            (true, false) => format!("{base} (disable click through)"),
+            (false, true) => format!("{base} (disable lock)"),
+            (false, false) => base,
+        }
+    }
+}
+
 fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
     let prefs = app
         .try_state::<SharedPrefs>()
@@ -122,7 +141,7 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
     let restore_interaction = MenuItem::with_id(
         app,
         "restore-interaction",
-        t("restoreInteraction", lang),
+        restore_interaction_label(lang, click_through, is_locked),
         true,
         None::<&str>,
     )?;

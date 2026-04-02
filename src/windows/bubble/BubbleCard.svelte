@@ -1,13 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
 
-  type RequestField = {
-    label: string;
-    value: string;
-    mono?: boolean;
-    multiline?: boolean;
-  };
-
   type SuggestionView = {
     title: string;
     subtitle: string;
@@ -20,6 +13,10 @@
     toolInput = {},
     suggestions = [],
     sessionId,
+    agentLabel = 'Claude',
+    sessionSummary = '',
+    sessionProject = '',
+    sessionShortId = '',
     isElicitation = false,
     modeLabel = '',
     modeDescription = '',
@@ -30,16 +27,23 @@
     toolInput?: Record<string, unknown>;
     suggestions?: unknown[];
     sessionId: string;
+    agentLabel?: string;
+    sessionSummary?: string;
+    sessionProject?: string;
+    sessionShortId?: string;
     isElicitation?: boolean;
     modeLabel?: string;
     modeDescription?: string;
   } = $props();
 
   const isModeNotice = $derived(windowKind === 'ModeNotice');
-  const hasInput = $derived(Object.keys(toolInput).length > 0);
   const commandText = $derived(extractCommand(toolInput));
-  const detailFields = $derived(buildDetailFields(toolInput, toolName));
-  const extraFields = $derived(buildExtraFields(toolInput));
+  const headerMeta = $derived(
+    [agentLabel, sessionProject, sessionShortId].filter(Boolean).join(' · '),
+  );
+  const shellName = $derived(detectShell(toolInput, toolName));
+  const cwdLabel = $derived(compactPath(getString(toolInput, ['cwd', 'workingDirectory', 'working_directory', 'dir', 'path'])));
+  const reasonText = $derived(compactReason(getString(toolInput, ['justification', 'reason', 'description'])));
 
   const TOOL_BADGES: Record<string, string> = {
     Bash: 'BASH', Read: 'READ', Write: 'WRITE', Edit: 'EDIT',
@@ -48,17 +52,6 @@
     NotebookEdit: 'NB',
   };
   const badge = $derived(TOOL_BADGES[toolName] ?? toolName.slice(0, 5).toUpperCase());
-
-  function stringifyValue(value: unknown): string {
-    if (typeof value === 'string') return value.trim();
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-    if (value === null || value === undefined) return '';
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
-    }
-  }
 
   function getString(input: Record<string, unknown>, keys: string[]): string {
     for (const key of keys) {
@@ -102,83 +95,23 @@
     return getString(input, ['command', 'cmd', 'script', 'input']);
   }
 
-  function buildDetailFields(input: Record<string, unknown>, tool: string): RequestField[] {
-    const fields: RequestField[] = [{ label: 'Tool', value: tool || 'Unknown' }];
-
-    const shell = detectShell(input, tool);
-    if (shell) {
-      fields.push({ label: 'Shell', value: shell, mono: true });
-    }
-
-    const cwd = getString(input, ['cwd', 'workingDirectory', 'working_directory', 'dir', 'path']);
-    if (cwd) {
-      fields.push({ label: 'Directory', value: cwd, mono: true });
-    }
-
-    const justification = getString(input, ['justification', 'reason', 'description']);
-    if (justification) {
-      fields.push({
-        label: 'Why Claude asked',
-        value: justification,
-        multiline: justification.includes('\n') || justification.length > 96,
-      });
-    }
-
-    const timeout = getString(input, ['timeout', 'timeoutMs', 'timeout_ms']);
-    if (timeout) {
-      fields.push({ label: 'Timeout', value: timeout, mono: true });
-    }
-
-    if (typeof input.background === 'boolean') {
-      fields.push({ label: 'Background', value: input.background ? 'Yes' : 'No' });
-    }
-
-    return fields;
+  function compactPath(path: string): string {
+    if (!path) return '';
+    const trimmed = path.replace(/\/+$/, '');
+    const name = trimmed.split('/').pop() ?? trimmed;
+    return name || trimmed;
   }
 
-  function buildExtraFields(input: Record<string, unknown>): RequestField[] {
-    const handledKeys = new Set([
-      'command',
-      'cmd',
-      'script',
-      'input',
-      'shell',
-      'shellType',
-      'shell_type',
-      'executable',
-      'program',
-      'cwd',
-      'workingDirectory',
-      'working_directory',
-      'dir',
-      'path',
-      'justification',
-      'reason',
-      'description',
-      'timeout',
-      'timeoutMs',
-      'timeout_ms',
-      'background',
-    ]);
-
-    return Object.entries(input)
-      .filter(([key, value]) => !handledKeys.has(key) && value !== null && value !== undefined && stringifyValue(value))
-      .slice(0, 6)
-      .map(([key, value]) => {
-        const rendered = stringifyValue(value);
-        return {
-          label: humanizeKey(key),
-          value: rendered,
-          mono: typeof value !== 'string' || /^[/~.-]|[A-Za-z0-9_-]+$/.test(rendered),
-          multiline: rendered.includes('\n') || rendered.length > 88,
-        };
-      });
+  function compactReason(reason: string): string {
+    if (!reason) return '';
+    const singleLine = reason.replace(/\s+/g, ' ').trim();
+    return singleLine.length > 88 ? `${singleLine.slice(0, 88).trimEnd()}...` : singleLine;
   }
 
   function requestTitle(): string {
-    if (isElicitation) return 'Claude needs a reply in Terminal';
-    if (toolName === 'Bash' && commandText) return 'Allow Claude to run this command?';
-    return `Allow Claude to use ${toolName || 'this tool'}?`;
+    if (isElicitation) return `${agentLabel} needs a reply in Terminal`;
+    if (toolName === 'Bash' && commandText) return `Allow ${agentLabel} to run this command?`;
+    return `Allow ${agentLabel} to use ${toolName || 'this tool'}?`;
   }
 
   async function allow() {
@@ -253,13 +186,16 @@
 {#if isModeNotice}
   <div class="bubble">
     <div class="glow glow-mode"></div>
-    <div class="header">
-      <div class="header-copy">
-        <span class="eyebrow">Claude</span>
-        <span class="title">Mode Changed</span>
+      <div class="header">
+        <div class="header-copy">
+          <span class="eyebrow">{agentLabel}</span>
+          <span class="title">{sessionSummary || 'Mode Changed'}</span>
+          {#if headerMeta}
+            <span class="meta">{headerMeta}</span>
+          {/if}
+        </div>
+        <span class="badge badge-mode">{modeLabel}</span>
       </div>
-      <span class="badge badge-mode">{modeLabel}</span>
-    </div>
 
     <div class="code-block mode-block">
       <pre>{modeDescription}</pre>
@@ -274,8 +210,11 @@
       <div class="glow"></div>
       <div class="header">
         <div class="header-copy">
-          <span class="eyebrow">{isElicitation ? 'Reply Needed' : 'Claude Wants Access'}</span>
-          <span class="title">{isElicitation ? 'Terminal Response Required' : 'Permission Request'}</span>
+          <span class="eyebrow">{isElicitation ? `${agentLabel} Needs Reply` : `${agentLabel} Wants Access`}</span>
+          <span class="title">{sessionSummary || (isElicitation ? 'Terminal Response Required' : 'Permission Request')}</span>
+          {#if headerMeta}
+            <span class="meta">{headerMeta}</span>
+          {/if}
         </div>
         <span class="badge">{badge}</span>
       </div>
@@ -286,50 +225,33 @@
           {#if isElicitation}
             Respond in the terminal session to continue this task.
           {:else}
-            The main buttons only decide this request. Suggested actions below change future behavior.
+            This only affects the current request.
           {/if}
         </div>
       </div>
 
-      {#if hasInput}
-        {#if commandText}
-          <div class="section-label">Command</div>
-          <div class="code-block command-block">
-            <pre>{commandText}</pre>
-          </div>
-        {/if}
+      {#if shellName || cwdLabel}
+        <div class="meta-row">
+          {#if shellName}
+            <span class="mini-meta">{shellName}</span>
+          {/if}
+          {#if cwdLabel}
+            <span class="mini-meta">{cwdLabel}</span>
+          {/if}
+        </div>
+      {/if}
 
-        {#if detailFields.length > 0}
-          <div class="section-label">Execution Details</div>
-          <div class="detail-list">
-            {#each detailFields as field}
-              <div class="detail-row">
-                <span class="detail-label">{field.label}</span>
-                {#if field.multiline}
-                  <pre class:detail-code={field.mono} class="detail-multiline">{field.value}</pre>
-                {:else}
-                  <span class:detail-code={field.mono} class="detail-value">{field.value}</span>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
+      {#if commandText}
+        <div class="code-block command-block">
+          <pre>{commandText}</pre>
+        </div>
+      {/if}
 
-        {#if extraFields.length > 0}
-          <div class="section-label extra-label">Other Parameters</div>
-          <div class="detail-list detail-list-compact">
-            {#each extraFields as field}
-              <div class="detail-row">
-                <span class="detail-label">{field.label}</span>
-                {#if field.multiline}
-                  <pre class:detail-code={field.mono} class="detail-multiline">{field.value}</pre>
-                {:else}
-                  <span class:detail-code={field.mono} class="detail-value">{field.value}</span>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
+      {#if reasonText}
+        <div class="reason">
+          <span class="reason-label">Reason</span>
+          <span class="reason-copy">{reasonText}</span>
+        </div>
       {/if}
 
       <div class="actions">
@@ -355,7 +277,7 @@
       </div>
 
     {#if suggestions.length > 0}
-      <div class="section-label suggestions-label">Suggested Future Rules</div>
+      <div class="section-label suggestions-label">Remember</div>
       <div class="suggestions">
         {#each suggestions as sug}
           {@const suggestion = describeSuggestion(sug)}
@@ -441,6 +363,32 @@
     letter-spacing: -0.02em;
   }
 
+  .meta {
+    font-size: 11px;
+    line-height: 1.4;
+    color: rgba(215, 206, 189, 0.84);
+    word-break: break-word;
+  }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 12px;
+  }
+
+  .mini-meta {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 0 9px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    font-size: 11px;
+    color: #d8cdbc;
+  }
+
   .badge {
     flex-shrink: 0;
     font-size: 10px;
@@ -500,9 +448,9 @@
     border: 1px solid rgba(255, 255, 255, 0.075);
     border-radius: 12px;
     padding: 12px 13px;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
     overflow: hidden;
-    max-height: 132px;
+    max-height: 88px;
   }
 
   .command-block {
@@ -524,30 +472,18 @@
     margin: 0;
   }
 
-  .detail-list {
+  .reason {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 5px;
     margin-bottom: 14px;
-  }
-
-  .detail-list-compact {
-    gap: 6px;
-  }
-
-  .detail-row {
-    display: grid;
-    grid-template-columns: 92px minmax(0, 1fr);
-    gap: 10px;
-    align-items: start;
-    padding: 9px 11px;
+    padding: 10px 12px;
     border-radius: 11px;
     background: rgba(255, 255, 255, 0.032);
     border: 1px solid rgba(255, 255, 255, 0.065);
   }
 
-  .detail-label {
-    padding-top: 1px;
+  .reason-label {
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.08em;
@@ -555,24 +491,10 @@
     color: var(--copy-secondary);
   }
 
-  .detail-value,
-  .detail-multiline {
-    min-width: 0;
-    margin: 0;
-    font-size: 12px;
+  .reason-copy {
+    font-size: 11.5px;
     line-height: 1.45;
-    color: #efe5d6;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .detail-code {
-    font-family: 'Cascadia Code', 'Fira Code', 'SF Mono', 'Consolas', monospace;
-    color: #d9c9b6;
-  }
-
-  .extra-label {
-    margin-top: 2px;
+    color: #e8ddce;
   }
 
   .actions {
