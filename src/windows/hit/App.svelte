@@ -8,6 +8,22 @@
     click_through: boolean;
   }
 
+  interface HitRegion {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
+
+  interface HitLayoutPayload {
+    width: number;
+    height: number;
+    regions: HitRegion[];
+    pointer_alpha?: number;
+  }
+
+  const DRAG_THRESHOLD_PHYSICAL_PX = 3;
+
   let isDragging = false;
   let pointerActive = false;
   let activePointerId: number | null = null;
@@ -18,10 +34,11 @@
   let snapSide: 'left' | 'right' | null = null;
   let positionLocked = false;
   let promptedLockedMenu = false;
+  let regions: HitRegion[] = [];
+  let pointerAlpha = 0;
   let unlistenSnap: UnlistenFn | null = null;
   let unlistenInteraction: UnlistenFn | null = null;
-
-  function toPhys(v: number) { return Math.round(v * window.devicePixelRatio); }
+  let unlistenLayout: UnlistenFn | null = null;
 
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return; // Only handle left click — right click goes to onContextMenu
@@ -29,8 +46,8 @@
     pointerActive = true;
     activePointerId = e.pointerId;
     promptedLockedMenu = false;
-    startX = toPhys(e.screenX);
-    startY = toPhys(e.screenY);
+    startX = e.screenX;
+    startY = e.screenY;
     if (positionLocked) return;
 
     invoke('drag_start', { x: startX, y: startY });
@@ -47,24 +64,28 @@
     }, 300);
   }
 
+  function dragDistanceThresholdLogicalPx() {
+    return DRAG_THRESHOLD_PHYSICAL_PX / (window.devicePixelRatio || 1);
+  }
+
   function onPointerMove(e: PointerEvent) {
     if (!pointerActive) return;
     if (activePointerId !== null && e.pointerId !== activePointerId) return;
     if (e.buttons === 0) return;
     if (positionLocked) {
-      const dx = toPhys(e.screenX) - startX;
-      const dy = toPhys(e.screenY) - startY;
-      if (!promptedLockedMenu && Math.sqrt(dx * dx + dy * dy) >= 3) {
+      const dx = e.screenX - startX;
+      const dy = e.screenY - startY;
+      if (!promptedLockedMenu && Math.sqrt(dx * dx + dy * dy) >= dragDistanceThresholdLogicalPx()) {
         promptedLockedMenu = true;
         invoke('show_context_menu');
       }
       return;
     }
-    // Mark as dragging after a few pixels of movement (matches Rust-side threshold)
+    // Mark as dragging after crossing the same physical-pixel threshold as Rust.
     if (!isDragging) {
       const dx = e.screenX - startX;
       const dy = e.screenY - startY;
-      if (Math.sqrt(dx * dx + dy * dy) >= 3) isDragging = true;
+      if (Math.sqrt(dx * dx + dy * dy) >= dragDistanceThresholdLogicalPx()) isDragging = true;
     }
     invoke('drag_move', { x: e.screenX, y: e.screenY });
   }
@@ -117,6 +138,17 @@
         positionLocked = payload.position_locked ?? false;
       });
 
+      unlistenLayout = await listen<HitLayoutPayload>('hit-layout-changed', ({ payload }) => {
+        regions = payload.regions ?? [];
+        pointerAlpha = payload.pointer_alpha ?? 0;
+      });
+
+      const initialLayout = await invoke<HitLayoutPayload | null>('get_current_hit_layout');
+      if (initialLayout) {
+        regions = initialLayout.regions ?? [];
+        pointerAlpha = initialLayout.pointer_alpha ?? 0;
+      }
+
       window.addEventListener('pointermove', onPointerMove);
       window.addEventListener('pointerup', onPointerUp);
       window.addEventListener('pointercancel', onPointerCancel);
@@ -130,29 +162,44 @@
     window.removeEventListener('pointercancel', onPointerCancel);
     unlistenSnap?.();
     unlistenInteraction?.();
+    unlistenLayout?.();
     if (clickTimer) clearTimeout(clickTimer);
   });
 </script>
 
-<div
-  class="hit-surface"
-  class:locked={positionLocked}
-  class:snap-left={snapSide === 'left'}
-  class:snap-right={snapSide === 'right'}
-  onpointerdown={onPointerDown}
-  oncontextmenu={onContextMenu}
-  onkeydown={onKeyDown}
-  role="button"
-  tabindex="0"
-  aria-label="Clyde desktop pet"
-></div>
+<div class="hit-root" style={`--pointer-alpha:${pointerAlpha}`}>
+  {#each regions as region, index (index)}
+    <div
+      class="hit-zone"
+      class:locked={positionLocked}
+      class:snap-left={snapSide === 'left'}
+      class:snap-right={snapSide === 'right'}
+      style:left={`${region.x}px`}
+      style:top={`${region.y}px`}
+      style:width={`${region.width}px`}
+      style:height={`${region.height}px`}
+      onpointerdown={onPointerDown}
+      oncontextmenu={onContextMenu}
+      onkeydown={onKeyDown}
+      role="button"
+      tabindex="0"
+      aria-label="Clyde desktop pet"
+    ></div>
+  {/each}
+</div>
 
 <style>
-  .hit-surface {
+  .hit-root {
     position: relative;
     width: 100%;
     height: 100%;
-    background: rgba(255, 255, 255, 0.01);
+    background: transparent;
+    pointer-events: none;
+  }
+
+  .hit-zone {
+    position: absolute;
+    background: rgba(0, 0, 0, var(--pointer-alpha, 0));
     cursor: grab;
     pointer-events: auto;
     touch-action: none;
@@ -160,11 +207,11 @@
     -webkit-user-select: none;
   }
 
-  .hit-surface.locked {
+  .hit-zone.locked {
     cursor: not-allowed;
   }
 
-  .hit-surface::after {
+  .hit-zone::after {
     content: '';
     position: absolute;
     inset: 0;
@@ -175,18 +222,18 @@
     border: 2px solid transparent;
   }
 
-  .hit-surface.snap-left::after,
-  .hit-surface.snap-right::after {
+  .hit-zone.snap-left::after,
+  .hit-zone.snap-right::after {
     opacity: 1;
     box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12), 0 10px 24px rgba(59, 130, 246, 0.2);
   }
 
-  .hit-surface.snap-left::after {
+  .hit-zone.snap-left::after {
     border-left-color: rgba(59, 130, 246, 0.9);
     background: linear-gradient(90deg, rgba(59, 130, 246, 0.22), transparent 42%);
   }
 
-  .hit-surface.snap-right::after {
+  .hit-zone.snap-right::after {
     border-right-color: rgba(59, 130, 246, 0.9);
     background: linear-gradient(270deg, rgba(59, 130, 246, 0.22), transparent 42%);
   }

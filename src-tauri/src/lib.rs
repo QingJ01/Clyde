@@ -3,6 +3,7 @@ mod codex_monitor;
 mod environment;
 mod focus;
 mod hooks;
+mod hit_regions;
 mod http_server;
 mod i18n;
 mod mini;
@@ -87,6 +88,7 @@ struct DragState {
     start_win_y: i32,
     start_mouse_x: f64,
     start_mouse_y: f64,
+    drag_scale_factor: f64,
 }
 type SharedDrag = Arc<Mutex<DragState>>;
 
@@ -94,6 +96,15 @@ type SharedDrag = Arc<Mutex<DragState>>;
 const DRAG_THRESHOLD: f64 = 3.0;
 const STARTUP_MIN_VISIBLE: i32 = 120;
 const DISPLAY_REPAIR_DELAY_MS: u64 = 120;
+
+#[cfg(target_os = "macos")]
+const MAC_HIT_REGION_FALLBACK_ALPHA: f32 = 1.0 / 255.0;
+#[cfg(not(target_os = "macos"))]
+const MAC_HIT_REGION_FALLBACK_ALPHA: f32 = 0.0;
+
+fn pointer_alpha_for_hit_regions() -> f32 {
+    MAC_HIT_REGION_FALLBACK_ALPHA
+}
 
 fn emit_snap_preview(app: &AppHandle, side: Option<mini::SnapSide>) {
     let side = side.map(|side| match side {
@@ -197,7 +208,7 @@ fn apply_click_through(app: &AppHandle, enabled: bool) {
             return;
         }
         if let Some(bounds) = windows::get_pet_bounds(app) {
-            windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
+            sync_hit_for_bounds(app, &bounds);
         }
         windows::show_hit_window(app);
     }
@@ -326,6 +337,40 @@ pub(crate) fn restore_interaction(app: &AppHandle) {
     sync_hit(app);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DragPoint {
+    x: f64,
+    y: f64,
+}
+
+fn drag_distance(start: DragPoint, current: DragPoint) -> f64 {
+    let dx = current.x - start.x;
+    let dy = current.y - start.y;
+    (dx * dx + dy * dy).sqrt()
+}
+
+fn logical_to_physical(point: DragPoint, scale_factor: f64) -> DragPoint {
+    DragPoint {
+        x: point.x * scale_factor,
+        y: point.y * scale_factor,
+    }
+}
+
+fn logical_drag_position(
+    base_x: i32,
+    base_y: i32,
+    start: DragPoint,
+    current: DragPoint,
+) -> (i32, i32) {
+    let dx = (current.x - start.x).round() as i32;
+    let dy = (current.y - start.y).round() as i32;
+    (base_x + dx, base_y + dy)
+}
+
+fn drag_pointer_in_basis(x: f64, y: f64, drag_scale_factor: f64) -> DragPoint {
+    logical_to_physical(DragPoint { x, y }, drag_scale_factor)
+}
+
 #[tauri::command]
 fn drag_start(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     emit_snap_preview(&app, None);
@@ -334,21 +379,29 @@ fn drag_start(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     // If pet bounds are unavailable (rare, e.g. during animation), use last known or 0,0.
     d.active = true;
     d.dragging = false;
-    d.start_mouse_x = x;
-    d.start_mouse_y = y;
-    // Window position in logical coords to match mouse coords
+
     if let Some(pet) = app.get_webview_window("pet") {
+        let scale_factor = pet.scale_factor().unwrap_or(1.0);
+        d.drag_scale_factor = scale_factor;
+        let start_mouse = logical_to_physical(DragPoint { x, y }, scale_factor);
+        d.start_mouse_x = start_mouse.x;
+        d.start_mouse_y = start_mouse.y;
+
+        // Window position in physical coords to match screen mouse coords
         if let Ok(pos) = pet.outer_position() {
-            let scale = pet.scale_factor().unwrap_or(1.0);
-            d.start_win_x = (pos.x as f64 / scale).round() as i32;
-            d.start_win_y = (pos.y as f64 / scale).round() as i32;
+            d.start_win_x = pos.x;
+            d.start_win_y = pos.y;
         }
+    } else {
+        d.drag_scale_factor = 1.0;
+        d.start_mouse_x = x;
+        d.start_mouse_y = y;
     }
 }
 
 #[tauri::command]
 fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
-    let (active, dragging, base_x, base_y, smx, smy) = {
+    let (active, dragging, base_x, base_y, smx, smy, drag_scale_factor) = {
         let d = drag.lock_or_recover();
         (
             d.active,
@@ -357,6 +410,7 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
             d.start_win_y,
             d.start_mouse_x,
             d.start_mouse_y,
+            d.drag_scale_factor,
         )
     };
     if !active {
@@ -371,19 +425,18 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
         return;
     }
 
-    let dx = x - smx;
-    let dy = y - smy;
+    let current = drag_pointer_in_basis(x, y, drag_scale_factor);
+    let start = DragPoint { x: smx, y: smy };
 
     // Don't start moving until the mouse has moved past the drag threshold
     if !dragging {
-        if (dx * dx + dy * dy).sqrt() < DRAG_THRESHOLD {
+        if drag_distance(start, current) < DRAG_THRESHOLD {
             return;
         }
         drag.lock_or_recover().dragging = true;
     }
 
-    let mut new_x = base_x + dx as i32;
-    let mut new_y = base_y + dy as i32;
+    let (mut new_x, mut new_y) = logical_drag_position(base_x, base_y, start, current);
 
     // Query pet bounds once for both clamp and hit-window sync
     let bounds = windows::get_pet_bounds(&app);
@@ -411,16 +464,8 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
             windows::clamp_window_to_monitor(new_x, new_y, pet_w, pet_h, &monitor, MIN_VISIBLE);
     }
 
-    // Convert logical → physical for set_position
-    let scale = app
-        .get_webview_window("pet")
-        .and_then(|p| p.scale_factor().ok())
-        .unwrap_or(1.0);
     if let Some(pet) = app.get_webview_window("pet") {
-        let _ = pet.set_position(PhysicalPosition::new(
-            (new_x as f64 * scale).round() as i32,
-            (new_y as f64 * scale).round() as i32,
-        ));
+        let _ = pet.set_position(PhysicalPosition::new(new_x, new_y));
     }
 
     // Construct updated bounds from the new position + known size (avoid second IPC query)
@@ -430,7 +475,7 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
         width: pet_w,
         height: pet_h,
     };
-    windows::sync_hit_window(&app, &updated, &windows::HitBox::INTERACTIVE);
+    sync_hit_for_bounds(&app, &updated);
     emit_snap_preview(
         &app,
         mini::edge_snap_for_bounds(&app, &updated).map(|snap| snap.side),
@@ -1045,7 +1090,7 @@ pub(crate) fn do_show_from_tray(app: &AppHandle) {
     windows::show_hit_window(app);
     // Re-sync hit window position (may have drifted during hide)
     if let Some(bounds) = windows::get_pet_bounds(app) {
-        windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
+        sync_hit_for_bounds(app, &bounds);
     }
     // Restore bubble windows
     if let Some(bubbles) = app.try_state::<permission::BubbleMap>() {
@@ -1074,20 +1119,24 @@ pub(crate) fn is_hidden(app: &AppHandle) -> bool {
 
 pub(crate) fn emit_state(app: &AppHandle, state_str: &str, svg: &str) {
     let flip = is_left_mini(app);
-    let is_mini = prefs::is_mini_mode(&app);
-
-    // In mini mode, map normal states to mini SVGs so the pet shows real-time status
-    let (out_state, out_svg) = if is_mini && !state_str.starts_with("mini-") {
-        let mini = mini_svg_for_state(state_str);
-        (mini.0, mini.1)
-    } else {
-        (state_str, svg)
-    };
+    let (out_state, out_svg) = state_for_current_display(app, state_str, svg);
 
     let _ = app.emit(
         "state-change",
         serde_json::json!({ "state": out_state, "svg": out_svg, "flip": flip }),
     );
+}
+
+fn state_for_current_display(app: &AppHandle, state_str: &str, svg: &str) -> (String, String) {
+    let is_mini = prefs::is_mini_mode(app);
+
+    // In mini mode, map normal states to mini SVGs so the pet shows real-time status.
+    if is_mini && !state_str.starts_with("mini-") {
+        let (mini_state, mini_svg) = mini_svg_for_state(state_str);
+        (mini_state.to_string(), mini_svg.to_string())
+    } else {
+        (state_str.to_string(), svg.to_string())
+    }
 }
 
 pub(crate) fn dismiss_transient_ui(
@@ -1101,6 +1150,7 @@ pub(crate) fn dismiss_transient_ui(
     };
     if let Some((resolved, svg)) = dismissed {
         emit_state(app, &resolved, &svg);
+        sync_hit(app);
     }
     permission::close_mode_notice_bubbles(app, bubbles);
 }
@@ -1138,8 +1188,34 @@ pub(crate) fn sync_hit(app: &AppHandle) {
     }
 }
 
-fn sync_hit_for_bounds(app: &AppHandle, bounds: &windows::WindowBounds) {
-    windows::sync_hit_window(app, bounds, &windows::HitBox::INTERACTIVE);
+fn current_hit_profile(app: &AppHandle) -> hit_regions::HitProfile {
+    let (state, svg) = app
+        .try_state::<SharedState>()
+        .map(|state| {
+            let sm = state.lock_or_recover();
+            (sm.current_state.clone(), sm.current_svg.clone())
+        })
+        .unwrap_or_else(|| ("idle".to_string(), "clyde-idle-follow.svg".to_string()));
+    let (_, display_svg) = state_for_current_display(app, &state, &svg);
+    let key = hit_regions::profile_for_svg(&display_svg);
+    hit_regions::profile(key)
+}
+
+pub(crate) fn sync_hit_for_bounds(app: &AppHandle, bounds: &windows::WindowBounds) {
+    let profile = current_hit_profile(app);
+    if let Some(mut layout) = windows::sync_hit_window(app, bounds, &profile) {
+        layout.pointer_alpha = pointer_alpha_for_hit_regions();
+        let _ = app.emit("hit-layout-changed", &layout);
+    }
+}
+
+#[tauri::command]
+fn get_current_hit_layout(app: AppHandle) -> Option<windows::HitLayout> {
+    let bounds = windows::get_pet_bounds(&app)?;
+    let profile = current_hit_profile(&app);
+    let mut layout = windows::sync_hit_window(&app, &bounds, &profile)?;
+    layout.pointer_alpha = pointer_alpha_for_hit_regions();
+    Some(layout)
 }
 
 fn preferred_bounds_for_current_display(
@@ -1312,6 +1388,7 @@ pub(crate) fn update_session_and_emit(
         (resolved, svg)
     };
     emit_state(app, &resolved, &svg);
+    sync_hit(app);
 }
 
 /// Atomically update state machine and emit to frontend.
@@ -1322,6 +1399,7 @@ fn transition(app: &AppHandle, state: &SharedState, state_str: &str, svg: &str) 
         sm.current_svg = svg.into();
     }
     emit_state(app, state_str, svg);
+    sync_hit(app);
 }
 
 fn cancel_pending_task(handle: &SleepAbortHandle) {
@@ -1406,7 +1484,7 @@ fn set_window_size(app: AppHandle, size: String, prefs: tauri::State<SharedPrefs
         let _ = _pet.set_size(tauri::PhysicalSize::new(w, h));
         if let Some(current) = current_bounds {
             let updated = windows::resized_pet_bounds(&current, w, h);
-            windows::sync_hit_window(&app, &updated, &windows::HitBox::INTERACTIVE);
+            sync_hit_for_bounds(&app, &updated);
         }
         let mut p = prefs.lock_or_recover();
         p.size = size;
@@ -1612,11 +1690,6 @@ fn setup_pet_window(app: &AppHandle, prefs: &prefs::Prefs) -> Option<windows::Wi
 
 fn setup_hit_window(app: &AppHandle, initial_bounds: Option<&windows::WindowBounds>) {
     if let Some(hit) = app.get_webview_window("hit") {
-        // macOS needs a near-transparent background (not fully transparent)
-        // to receive pointer events. Windows/Linux work with fully transparent.
-        #[cfg(target_os = "macos")]
-        let _ = hit.set_background_color(Some(Color(0, 0, 0, 1)));
-        #[cfg(not(target_os = "macos"))]
         let _ = hit.set_background_color(Some(Color(0, 0, 0, 0)));
     }
     let fallback_bounds = if initial_bounds.is_none() {
@@ -1699,13 +1772,16 @@ fn start_cleanup_loop(app: &AppHandle, state: SharedState) {
             let changed = state_for_cleanup.lock_or_recover().clean_stale();
             if changed {
                 let (resolved, svg) = {
-                    let sm = state_for_cleanup.lock_or_recover();
+                    let mut sm = state_for_cleanup.lock_or_recover();
                     let r = sm.resolve_display_state();
                     let s = sm.svg_for_state(&r);
+                    sm.current_state = r.clone();
+                    sm.current_svg = s.clone();
                     (r, s)
                 };
                 // Lock dropped before emit_state to avoid holding state across prefs/mini locks
                 emit_state(&app_for_cleanup, &resolved, &svg);
+                sync_hit(&app_for_cleanup);
             }
         }
     });
@@ -1719,6 +1795,7 @@ pub fn run() {
         start_win_y: 0,
         start_mouse_x: 0.0,
         start_mouse_y: 0.0,
+        drag_scale_factor: 1.0,
     }));
     let shared_state: SharedState = Arc::new(Mutex::new(StateMachine::new()));
     let pending_perms: PendingPerms = Arc::new(Mutex::new(HashMap::new()));
@@ -1747,7 +1824,7 @@ pub fn run() {
             drag_start, drag_move, drag_end, exit_mini_mode,
             hit_double_click, hit_flail, show_context_menu,
             toggle_dnd, mini_peek_in, mini_peek_out,
-            get_pet_config, get_interaction_state, get_menu_data, menu_action,
+            get_pet_config, get_interaction_state, get_current_hit_layout, get_menu_data, menu_action,
             http_server::resolve_permission,
             trigger_sleep_sequence,
             trigger_wake,
@@ -1872,4 +1949,55 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_drag_distance_uses_single_coordinate_space() {
+        let start = DragPoint { x: 400.0, y: 320.0 };
+        let current = DragPoint { x: 430.0, y: 356.0 };
+        assert_eq!(drag_distance(start, current).round() as i32, 47);
+    }
+
+    #[test]
+    fn test_logical_drag_position_adds_screen_delta_to_window_origin() {
+        let start = DragPoint { x: 800.0, y: 640.0 };
+        let current = DragPoint { x: 860.0, y: 712.0 };
+        assert_eq!(logical_drag_position(120, 80, start, current), (180, 152));
+    }
+
+    #[test]
+    fn test_drag_move_uses_drag_start_scale_factor_for_consistent_delta() {
+        let base = (500, 300);
+        let start_logical = DragPoint { x: 100.0, y: 100.0 };
+        let current_logical = DragPoint { x: 130.0, y: 100.0 };
+
+        let start_physical = logical_to_physical(start_logical, 2.0);
+        let current_physical_with_drag_start_scale = logical_to_physical(current_logical, 2.0);
+        let current_physical_with_current_scale = logical_to_physical(current_logical, 1.0);
+
+        assert_eq!(
+            logical_drag_position(
+                base.0,
+                base.1,
+                start_physical,
+                current_physical_with_drag_start_scale,
+            ),
+            (560, 300)
+        );
+
+        // Mixed-basis conversion (using a different scale for current pointer) produces a wrong delta.
+        assert_ne!(
+            logical_drag_position(
+                base.0,
+                base.1,
+                start_physical,
+                current_physical_with_current_scale,
+            ),
+            (560, 300)
+        );
+    }
 }

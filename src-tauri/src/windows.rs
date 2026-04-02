@@ -1,5 +1,8 @@
+use serde::Serialize;
 use tauri::window::Monitor;
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
+
+use crate::hit_regions::HitProfile;
 
 pub const OBJ_SCALE_W: f64 = 1.9;
 pub const OBJ_SCALE_H: f64 = 1.3;
@@ -28,6 +31,24 @@ pub struct HitRect {
     pub top: f64,
     pub right: f64,
     pub bottom: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct LocalHitRegion {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HitLayout {
+    pub window_x: i32,
+    pub window_y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub regions: Vec<LocalHitRegion>,
+    pub pointer_alpha: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -254,49 +275,153 @@ pub fn clamp_window_to_monitor(
     (x, y)
 }
 
-pub fn sync_hit_window(app: &AppHandle, pet_bounds: &WindowBounds, hb: &HitBox) {
-    let hit_win = match app.get_webview_window("hit") {
-        Some(w) => w,
-        None => return,
-    };
-    let rect = sync_rect_for_hitbox(pet_bounds, hb);
-    let mut x = rect.left.round() as i32;
-    let mut y = rect.top.round() as i32;
-    let mut w = (rect.right - rect.left).round() as i32;
-    let mut h = (rect.bottom - rect.top).round() as i32;
-    if w <= 0 || h <= 0 {
-        return;
+pub fn compute_hit_layout(bounds: &WindowBounds, profile: &HitProfile) -> Option<HitLayout> {
+    let mut absolute_regions: Vec<(i32, i32, i32, i32)> = Vec::new();
+
+    for rect in profile.rects {
+        let x = bounds.x + (bounds.width as f32 * rect.x).round() as i32;
+        let y = bounds.y + (bounds.height as f32 * rect.y).round() as i32;
+        let w = (bounds.width as f32 * rect.width).round() as i32;
+        let h = (bounds.height as f32 * rect.height).round() as i32;
+        if w <= 0 || h <= 0 {
+            continue;
+        }
+        absolute_regions.push((x, y, w, h));
     }
 
-    // Clamp to screen bounds so the hit window is always clickable.
-    // NOTE: w can go negative after clamping (pet mostly off-screen), so the
-    // `w <= 0` guard below is critical before the `w as u32` cast.
+    if absolute_regions.is_empty() {
+        return None;
+    }
+
+    let window_x = absolute_regions.iter().map(|(x, _, _, _)| *x).min()?;
+    let window_y = absolute_regions.iter().map(|(_, y, _, _)| *y).min()?;
+    let right = absolute_regions
+        .iter()
+        .map(|(x, _, w, _)| x + w)
+        .max()?;
+    let bottom = absolute_regions
+        .iter()
+        .map(|(_, y, _, h)| y + h)
+        .max()?;
+
+    let width = (right - window_x).max(0) as u32;
+    let height = (bottom - window_y).max(0) as u32;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let regions = absolute_regions
+        .into_iter()
+        .map(|(x, y, w, h)| LocalHitRegion {
+            x: x - window_x,
+            y: y - window_y,
+            width: w as u32,
+            height: h as u32,
+        })
+        .collect();
+
+    Some(HitLayout {
+        window_x,
+        window_y,
+        width,
+        height,
+        regions,
+        pointer_alpha: 0.0,
+    })
+}
+
+fn crop_regions_to_layout(layout: &mut HitLayout) {
+    let max_x = layout.width as i32;
+    let max_y = layout.height as i32;
+    let mut cropped = Vec::with_capacity(layout.regions.len());
+
+    for region in &layout.regions {
+        let left = region.x.max(0);
+        let top = region.y.max(0);
+        let right = (region.x + region.width as i32).min(max_x);
+        let bottom = (region.y + region.height as i32).min(max_y);
+        let width = (right - left).max(0);
+        let height = (bottom - top).max(0);
+        if width > 0 && height > 0 {
+            cropped.push(LocalHitRegion {
+                x: left,
+                y: top,
+                width: width as u32,
+                height: height as u32,
+            });
+        }
+    }
+
+    layout.regions = cropped;
+}
+
+fn clamp_layout_to_monitor(layout: &mut HitLayout, monitor: &MonitorArea) {
+    let screen_left = monitor.x;
+    let screen_top = monitor.y;
+    let screen_right = monitor.x + monitor.width as i32;
+    let screen_bottom = monitor.y + monitor.height as i32;
+
+    if layout.window_x < screen_left {
+        let delta = screen_left - layout.window_x;
+        layout.window_x = screen_left;
+        layout.width = layout.width.saturating_sub(delta as u32);
+        for region in &mut layout.regions {
+            region.x -= delta;
+        }
+    }
+
+    if layout.window_y < screen_top {
+        let delta = screen_top - layout.window_y;
+        layout.window_y = screen_top;
+        layout.height = layout.height.saturating_sub(delta as u32);
+        for region in &mut layout.regions {
+            region.y -= delta;
+        }
+    }
+
+    let over_right = layout.window_x + layout.width as i32 - screen_right;
+    if over_right > 0 {
+        layout.width = layout.width.saturating_sub(over_right as u32);
+    }
+
+    let over_bottom = layout.window_y + layout.height as i32 - screen_bottom;
+    if over_bottom > 0 {
+        layout.height = layout.height.saturating_sub(over_bottom as u32);
+    }
+
+    crop_regions_to_layout(layout);
+}
+
+fn collapse_hit_layout(layout: HitLayout) -> HitLayout {
+    HitLayout {
+        window_x: layout.window_x,
+        window_y: layout.window_y,
+        width: 1,
+        height: 1,
+        regions: Vec::new(),
+        pointer_alpha: layout.pointer_alpha,
+    }
+}
+
+pub fn sync_hit_window(
+    app: &AppHandle,
+    pet_bounds: &WindowBounds,
+    profile: &HitProfile,
+) -> Option<HitLayout> {
+    let hit_win = app.get_webview_window("hit")?;
+    let mut layout = compute_hit_layout(pet_bounds, profile)?;
+
     if let Some(monitor) = monitor_for_bounds(app, pet_bounds) {
-        let screen_left = monitor.x;
-        let screen_top = monitor.y;
-        let screen_right = monitor.x + monitor.width as i32;
-        let screen_bottom = monitor.y + monitor.height as i32;
-        if x < screen_left {
-            w -= screen_left - x;
-            x = screen_left;
-        }
-        if y < screen_top {
-            h -= screen_top - y;
-            y = screen_top;
-        }
-        if x + w > screen_right {
-            w = screen_right - x;
-        }
-        if y + h > screen_bottom {
-            h = screen_bottom - y;
-        }
-    }
-    if w <= 0 || h <= 0 {
-        return;
+        clamp_layout_to_monitor(&mut layout, &monitor);
     }
 
-    let _ = hit_win.set_position(PhysicalPosition::new(x, y));
-    let _ = hit_win.set_size(PhysicalSize::new(w as u32, h as u32));
+    if layout.width == 0 || layout.height == 0 || layout.regions.is_empty() {
+        layout = collapse_hit_layout(layout);
+    }
+
+    let _ = hit_win.set_position(PhysicalPosition::new(layout.window_x, layout.window_y));
+    let _ = hit_win.set_size(PhysicalSize::new(layout.width, layout.height));
+    Some(layout)
 }
 
 pub fn get_pet_bounds(app: &AppHandle) -> Option<WindowBounds> {
@@ -535,22 +660,90 @@ mod tests {
     }
 
     #[test]
-    fn test_startup_position_clamps_when_bounds_are_still_partially_visible() {
+    fn test_hit_layout_for_standing_profile_is_smaller_than_full_pet_window() {
         let bounds = WindowBounds {
-            x: 1400,
-            y: 40,
-            width: 360,
-            height: 360,
+            x: 100,
+            y: 120,
+            width: 200,
+            height: 200,
         };
-        let monitors = vec![MonitorArea {
-            key: "main".into(),
-            x: 0,
-            y: 0,
-            width: 1512,
-            height: 982,
-        }];
-        let (x, y) = startup_position_with_monitors(&bounds, &monitors, 120);
-        assert_eq!(x, 1392);
-        assert_eq!(y, 40);
+        let profile = crate::hit_regions::profile(crate::hit_regions::HitProfileKey::Standing);
+        let layout = compute_hit_layout(&bounds, &profile).expect("layout");
+        assert!(layout.width < bounds.width);
+        assert!(layout.height < bounds.height);
+    }
+
+    #[test]
+    fn test_hit_layout_regions_are_local_to_hit_window() {
+        let bounds = WindowBounds {
+            x: 100,
+            y: 120,
+            width: 200,
+            height: 200,
+        };
+        let profile = crate::hit_regions::profile(crate::hit_regions::HitProfileKey::Mini);
+        let layout = compute_hit_layout(&bounds, &profile).expect("layout");
+        assert!(layout.regions.iter().all(|region| region.x >= 0 && region.y >= 0));
+        assert!(layout
+            .regions
+            .iter()
+            .all(|region| region.x as u32 + region.width <= layout.width));
+        assert!(layout
+            .regions
+            .iter()
+            .all(|region| region.y as u32 + region.height <= layout.height));
+    }
+
+    #[test]
+    fn test_clamp_can_fully_crop_layout() {
+        let monitor = MonitorArea {
+            key: "primary".into(),
+            x: 100,
+            y: 100,
+            width: 100,
+            height: 100,
+        };
+        let mut layout = HitLayout {
+            window_x: 0,
+            window_y: 0,
+            width: 50,
+            height: 50,
+            regions: vec![LocalHitRegion {
+                x: 0,
+                y: 0,
+                width: 50,
+                height: 50,
+            }],
+            pointer_alpha: 0.0,
+        };
+
+        clamp_layout_to_monitor(&mut layout, &monitor);
+
+        assert_eq!(layout.window_x, 100);
+        assert_eq!(layout.window_y, 100);
+        assert_eq!(layout.width, 0);
+        assert_eq!(layout.height, 0);
+        assert!(layout.regions.is_empty());
+    }
+
+    #[test]
+    fn test_collapse_hit_layout_clears_regions_with_min_size() {
+        let layout = HitLayout {
+            window_x: 640,
+            window_y: 360,
+            width: 0,
+            height: 0,
+            regions: vec![],
+            pointer_alpha: 0.25,
+        };
+
+        let collapsed = collapse_hit_layout(layout);
+
+        assert_eq!(collapsed.window_x, 640);
+        assert_eq!(collapsed.window_y, 360);
+        assert_eq!(collapsed.width, 1);
+        assert_eq!(collapsed.height, 1);
+        assert!(collapsed.regions.is_empty());
+        assert_eq!(collapsed.pointer_alpha, 0.25);
     }
 }

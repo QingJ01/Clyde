@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 const POLL_INTERVAL_MS: u64 = 2000;
 
@@ -113,22 +113,14 @@ pub fn start_claude_monitor(app: AppHandle, state: SharedState) {
 
                 // Apply the last state from this batch of new lines
                 if let Some(state_str) = last_state {
-                    let (resolved, svg) = {
-                        let mut sm = state.lock().unwrap_or_else(|e| e.into_inner());
-                        // Only update if not already tracked by command hooks
-                        // (hooks use session_id from Claude Code, monitor uses prefixed ID)
-                        sm.update_session_state(&session_id, state_str, "monitor");
-                        let resolved = sm.resolve_display_state();
-                        let svg = sm.svg_for_state(&resolved);
-                        sm.current_state = resolved.clone();
-                        sm.current_svg = svg.clone();
-                        (resolved, svg)
-                    };
-                    let _ = app.emit(
-                        "state-change",
-                        serde_json::json!({
-                            "state": resolved, "svg": svg
-                        }),
+                    // Only update if not already tracked by command hooks
+                    // (hooks use session_id from Claude Code, monitor uses prefixed ID)
+                    crate::update_session_and_emit(
+                        &app,
+                        &state,
+                        &session_id,
+                        state_str,
+                        "monitor",
                     );
                 }
             }
