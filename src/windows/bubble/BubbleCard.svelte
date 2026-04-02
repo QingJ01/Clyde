@@ -23,7 +23,7 @@
     modeDescription?: string;
   } = $props();
 
-  const isModeNotice = windowKind === 'ModeNotice';
+  const isModeNotice = $derived(windowKind === 'ModeNotice');
 
   // Map tool names to short labels for the badge
   const TOOL_BADGES: Record<string, string> = {
@@ -32,7 +32,7 @@
     WebFetch: 'WEB', WebSearch: 'WEB',
     NotebookEdit: 'NB',
   };
-  const badge = TOOL_BADGES[toolName] ?? toolName.slice(0, 5).toUpperCase();
+  const badge = $derived(TOOL_BADGES[toolName] ?? toolName.slice(0, 5).toUpperCase());
 
   function formatInput(input: Record<string, unknown>): string {
     const entries = Object.entries(input).slice(0, 3);
