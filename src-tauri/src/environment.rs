@@ -3,7 +3,6 @@ use tauri::{AppHandle, Manager};
 use crate::prefs::SharedPrefs;
 use crate::state_machine::SharedState;
 use crate::util::MutexExt;
-use crate::windows::{self, MonitorArea};
 
 #[derive(Debug, Default, Clone, Copy)]
 struct EnvironmentSnapshot {
@@ -57,6 +56,7 @@ fn detect_environment(_app: &AppHandle) -> EnvironmentSnapshot {
 
 #[cfg(target_os = "macos")]
 fn detect_environment(app: &AppHandle) -> EnvironmentSnapshot {
+    use crate::windows;
     use core_foundation::base::TCFType;
     use core_foundation::dictionary::CFDictionary;
     use core_foundation::string::CFString;

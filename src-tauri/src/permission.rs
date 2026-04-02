@@ -296,10 +296,6 @@ fn get_scale(app: &AppHandle) -> f64 {
         .unwrap_or(1.0)
 }
 
-fn scaled(logical: u32, scale: f64) -> i32 {
-    (logical as f64 * scale).round() as i32
-}
-
 #[tauri::command]
 pub fn get_bubble_data(bubbles: tauri::State<BubbleMap>, id: String) -> Option<BubbleData> {
     bubbles.lock_or_recover().get(&id).map(|e| e.data.clone())

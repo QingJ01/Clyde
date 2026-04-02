@@ -312,41 +312,8 @@ pub fn get_pet_bounds(app: &AppHandle) -> Option<WindowBounds> {
 }
 
 /// Get the monitor the pet window is currently on.
-/// Falls back to primary monitor, then to default screen size.
-/// Get the monitor the pet is on, in **physical pixels**.
-/// Matches get_pet_bounds(), outer_position(), cursor_position(), etc.
-/// Only drag_move needs logical coords — it converts separately.
-pub fn get_pet_monitor(app: &AppHandle) -> MonitorBounds {
-    if let Some(pet) = app.get_webview_window("pet") {
-        if let Ok(Some(monitor)) = pet.current_monitor() {
-            let pos = monitor.position();
-            let size = monitor.size();
-            return MonitorBounds {
-                x: pos.x, y: pos.y,
-                width: size.width, height: size.height,
-            };
-        }
-    }
-    if let Some(monitor) = app.primary_monitor().ok().flatten() {
-        let pos = monitor.position();
-        let size = monitor.size();
-        return MonitorBounds {
-            x: pos.x, y: pos.y,
-            width: size.width, height: size.height,
-        };
-    }
-    MonitorBounds { x: 0, y: 0, width: 1920, height: 1080 }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct MonitorBounds {
-    pub x: i32,
-    pub y: i32,
-    pub width: u32,
-    pub height: u32,
-}
-
-/// Construct pet bounds from persisted prefs (used at startup before window is fully rendered).
+/// Construct pet bounds from persisted prefs (used in tests).
+#[cfg(test)]
 pub fn startup_pet_bounds(prefs: &crate::prefs::Prefs) -> WindowBounds {
     let (width, height) = crate::prefs::size_to_pixels(&prefs.size);
     WindowBounds { x: prefs.x, y: prefs.y, width, height }

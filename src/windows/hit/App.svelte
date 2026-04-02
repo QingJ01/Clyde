@@ -62,11 +62,11 @@
     }
     // Mark as dragging after a few pixels of movement (matches Rust-side threshold)
     if (!isDragging) {
-      const dx = e.screenX - startX;
-      const dy = e.screenY - startY;
+      const dx = toPhys(e.screenX) - startX;
+      const dy = toPhys(e.screenY) - startY;
       if (Math.sqrt(dx * dx + dy * dy) >= 3) isDragging = true;
     }
-    invoke('drag_move', { x: e.screenX, y: e.screenY });
+    invoke('drag_move', { x: toPhys(e.screenX), y: toPhys(e.screenY) });
   }
 
   function onPointerUp(e: PointerEvent) {

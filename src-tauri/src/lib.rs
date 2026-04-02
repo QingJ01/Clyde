@@ -486,16 +486,6 @@ fn drag_end(
             persist_current_pet_position(&app);
         }
     }
-
-    // Persist position after every drag so it survives crashes/force-quit
-    if was_dragging {
-        if let (Some(bounds), Some(prefs_state)) = (windows::get_pet_bounds(&app), app.try_state::<SharedPrefs>()) {
-            let mut p = prefs_state.lock_or_recover();
-            p.x = bounds.x;
-            p.y = bounds.y;
-            prefs::save(&app, &p);
-        }
-    }
 }
 
 #[tauri::command]
@@ -1001,6 +991,11 @@ pub(crate) fn set_auto_hidden(app: &AppHandle, state: &SharedState, enabled: boo
     if enabled {
         let _ = pet.hide();
         windows::hide_hit_window(app);
+        return;
+    }
+
+    // Don't auto-restore if user manually hid to tray
+    if is_hidden(app) {
         return;
     }
 

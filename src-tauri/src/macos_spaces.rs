@@ -45,6 +45,7 @@ pub fn apply_space_follow(window: &tauri::WebviewWindow) {
 /// Refreshes an existing window after a Space switch without activating app focus.
 ///
 /// This should run on AppKit main thread.
+#[allow(dead_code)]
 pub fn refresh_space_follow(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]
     unsafe {
@@ -74,6 +75,7 @@ pub fn refresh_space_follow(window: &tauri::WebviewWindow) {
 ///
 /// The observer is intentionally leaked for process lifetime so notifications
 /// remain active without additional global state plumbing.
+#[allow(dead_code)]
 pub fn install_active_space_observer<F>(on_change: F)
 where
     F: Fn() + 'static,
