@@ -51,6 +51,11 @@
       sessionProject={bubbleData.session_project ?? ''}
       sessionShortId={bubbleData.session_short_id ?? ''}
       isElicitation={bubbleData.is_elicitation ?? false}
+      elicitationMessage={bubbleData.elicitation_message ?? ''}
+      elicitationSchema={bubbleData.elicitation_schema ?? null}
+      elicitationMode={bubbleData.elicitation_mode ?? ''}
+      elicitationUrl={bubbleData.elicitation_url ?? ''}
+      elicitationServerName={bubbleData.elicitation_server_name ?? ''}
       modeLabel={bubbleData.mode_label ?? ''}
       modeDescription={bubbleData.mode_description ?? ''}
     />

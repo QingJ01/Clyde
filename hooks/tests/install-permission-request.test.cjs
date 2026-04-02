@@ -39,6 +39,11 @@ test("flat PermissionRequest entry is rewritten to nested format", () => {
     assert.match(entries[0].hooks[0].url, /\/permission$/);
     assert.equal(entries[0].url, undefined, "flat url field should not exist");
     assert.ok(result.migrated >= 1, "should report at least 1 migrated entry");
+
+    const elicitationEntries = parsed.hooks.Elicitation;
+    assert.equal(elicitationEntries.length, 1);
+    assert.equal(elicitationEntries[0].matcher, "");
+    assert.match(elicitationEntries[0].hooks[0].url, /\/elicitation$/);
   } finally {
     try { fs.unlinkSync(tmp); } catch {}
   }
@@ -72,8 +77,34 @@ test("repeated registerHooks() is idempotent", () => {
     registerHooks({ ...REG_OPTS, settingsPath: tmp });
     const third = JSON.parse(fs.readFileSync(tmp, "utf8"));
     assert.equal(third.hooks.PermissionRequest.length, 1, "PermissionRequest should not accumulate");
+    assert.equal(third.hooks.Elicitation.length, 1, "Elicitation should not accumulate");
     assert.deepStrictEqual(first.hooks.SessionStart, third.hooks.SessionStart, "SessionStart should not change across runs");
     assert.deepStrictEqual(first.hooks.PermissionRequest, third.hooks.PermissionRequest, "PermissionRequest should not change across runs");
+    assert.deepStrictEqual(first.hooks.Elicitation, third.hooks.Elicitation, "Elicitation should not change across runs");
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+});
+
+test("flat Elicitation entry is rewritten to nested format", () => {
+  const tmp = tmpSettings({
+    hooks: {
+      Elicitation: [
+        { type: "http", url: "http://127.0.0.1:23333/elicitation", timeout: 600 },
+      ],
+    },
+  });
+  try {
+    const result = registerHooks({ ...REG_OPTS, settingsPath: tmp });
+    const parsed = JSON.parse(fs.readFileSync(tmp, "utf8"));
+    const entries = parsed.hooks.Elicitation;
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].matcher, "");
+    assert.equal(entries[0].hooks.length, 1);
+    assert.equal(entries[0].hooks[0].type, "http");
+    assert.match(entries[0].hooks[0].url, /\/elicitation$/);
+    assert.equal(entries[0].url, undefined, "flat url field should not exist");
+    assert.ok(result.migrated >= 1, "should report at least 1 migrated entry");
   } finally {
     try { fs.unlinkSync(tmp); } catch {}
   }
@@ -111,7 +142,7 @@ test("removeFlatHttpHooks: removes Clyde flat entry", () => {
   const entries = [
     { type: "http", url: "http://127.0.0.1:23333/permission", timeout: 600 },
   ];
-  const result = removeFlatHttpHooks(entries);
+  const result = removeFlatHttpHooks(entries, "/permission");
   assert.equal(result.entries.length, 0);
   assert.equal(result.removed, 1);
   assert.ok(result.changed);
@@ -121,7 +152,7 @@ test("removeFlatHttpHooks: preserves unrelated flat HTTP hook", () => {
   const entries = [
     { type: "http", url: "https://example.com/my-permission-webhook", timeout: 30 },
   ];
-  const result = removeFlatHttpHooks(entries);
+  const result = removeFlatHttpHooks(entries, "/permission");
   assert.equal(result.entries.length, 1, "unrelated hook should be preserved");
   assert.equal(result.removed, 0);
   assert.ok(!result.changed);
@@ -131,7 +162,7 @@ test("removeFlatHttpHooks: preserves nested format entries", () => {
   const entries = [
     { matcher: "", hooks: [{ type: "http", url: "http://127.0.0.1:23333/permission" }] },
   ];
-  const result = removeFlatHttpHooks(entries);
+  const result = removeFlatHttpHooks(entries, "/permission");
   assert.equal(result.entries.length, 1, "nested entry should not be removed");
   assert.equal(result.removed, 0);
 });
@@ -141,7 +172,7 @@ test("removeFlatHttpHooks: handles different ports", () => {
     { type: "http", url: "http://127.0.0.1:23335/permission", timeout: 600 },
     { type: "http", url: "http://127.0.0.1:23339/permission", timeout: 600 },
   ];
-  const result = removeFlatHttpHooks(entries);
+  const result = removeFlatHttpHooks(entries, "/permission");
   assert.equal(result.entries.length, 0, "all Clyde flat entries removed regardless of port");
   assert.equal(result.removed, 2);
 });
@@ -151,7 +182,18 @@ test("removeFlatHttpHooks: does not match URL with permission as substring", () 
     { type: "http", url: "http://127.0.0.1:8080/api/permission-check" },
     { type: "http", url: "http://myserver.com/permission" },
   ];
-  const result = removeFlatHttpHooks(entries);
+  const result = removeFlatHttpHooks(entries, "/permission");
   assert.equal(result.entries.length, 2, "neither should match — wrong host or has path suffix");
   assert.equal(result.removed, 0);
+});
+
+test("removeFlatHttpHooks: uses endpoint-specific matching", () => {
+  const entries = [
+    { type: "http", url: "http://127.0.0.1:23333/permission", timeout: 600 },
+    { type: "http", url: "http://127.0.0.1:23333/elicitation", timeout: 600 },
+  ];
+  const result = removeFlatHttpHooks(entries, "/elicitation");
+  assert.equal(result.entries.length, 1);
+  assert.equal(result.entries[0].url, "http://127.0.0.1:23333/permission");
+  assert.equal(result.removed, 1);
 });

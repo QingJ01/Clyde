@@ -27,6 +27,11 @@ pub struct BubbleData {
     pub session_project: String,
     pub session_short_id: String,
     pub is_elicitation: bool,
+    pub elicitation_message: Option<String>,
+    pub elicitation_schema: Option<serde_json::Value>,
+    pub elicitation_mode: Option<String>,
+    pub elicitation_url: Option<String>,
+    pub elicitation_server_name: Option<String>,
     // mode_notice fields
     pub mode_label: Option<String>,
     pub mode_description: Option<String>,

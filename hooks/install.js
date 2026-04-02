@@ -6,7 +6,14 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { buildPermissionUrl, DEFAULT_SERVER_PORT, PERMISSION_PATH, readRuntimePort } = require("./server-config");
+const {
+  buildElicitationUrl,
+  buildPermissionUrl,
+  DEFAULT_SERVER_PORT,
+  ELICITATION_PATH,
+  PERMISSION_PATH,
+  readRuntimePort,
+} = require("./server-config");
 
 // Hooks supported by all Claude Code versions
 const CORE_HOOKS = [
@@ -20,8 +27,7 @@ const CORE_HOOKS = [
   "SubagentStart",
   "SubagentStop",
   "Notification",
-  // PermissionRequest: handled by HTTP_HOOKS (blocking), not command hook
-  "Elicitation",
+  // PermissionRequest / Elicitation: handled by HTTP_HOOKS (blocking), not command hook
   "WorktreeCreate",
 ];
 
@@ -98,8 +104,6 @@ function getClaudeVersion(options = {}) {
 const MARKER = "clyde-hook.js";
 const AUTO_START_MARKER = "auto-start.js";
 const LEGACY_AUTO_START_MARKER = "auto-start.sh";
-const HTTP_MARKER = PERMISSION_PATH;
-
 function forEachCommandHook(entries, visitor) {
   if (!Array.isArray(entries)) return;
   for (const entry of entries) {
@@ -191,13 +195,17 @@ function writeJsonAtomic(filePath, data) {
   }
 }
 
-function syncHttpHook(entries, expectedUrl) {
+function syncHttpHook(entries, endpointPath, expectedUrl) {
   let found = false;
   let changed = false;
   if (!Array.isArray(entries)) return { found, changed };
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
-    if (entry.type === "http" && typeof entry.url === "string" && entry.url.includes(HTTP_MARKER)) {
+    if (
+      entry.type === "http" &&
+      typeof entry.url === "string" &&
+      entry.url.includes(endpointPath)
+    ) {
       found = true;
       if (entry.url !== expectedUrl) {
         entry.url = expectedUrl;
@@ -207,7 +215,7 @@ function syncHttpHook(entries, expectedUrl) {
     if (!Array.isArray(entry.hooks)) continue;
     for (const hook of entry.hooks) {
       if (!hook || typeof hook !== "object" || hook.type !== "http" || typeof hook.url !== "string") continue;
-      if (!hook.url.includes(HTTP_MARKER)) continue;
+      if (!hook.url.includes(endpointPath)) continue;
       found = true;
       if (hook.url !== expectedUrl) {
         hook.url = expectedUrl;
@@ -220,21 +228,22 @@ function syncHttpHook(entries, expectedUrl) {
 
 /**
  * Remove flat (non-nested) HTTP hook entries whose URL matches the Clyde
- * permission endpoint pattern: http://127.0.0.1:<port>/permission
+ * endpoint pattern: http://127.0.0.1:<port><endpointPath>
  * Uses an exact pattern match to avoid accidentally removing unrelated hooks
- * that happen to contain "/permission" as a substring.
+ * that happen to contain the endpoint path as a substring.
  */
-function removeFlatHttpHooks(entries) {
+function removeFlatHttpHooks(entries, endpointPath) {
   if (!Array.isArray(entries)) return { entries: [], removed: 0, changed: false };
 
-  const CLYDE_PERM_URL = /^https?:\/\/127\.0\.0\.1:\d+\/permission$/;
+  const escapedPath = endpointPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const endpointPattern = new RegExp(`^https?:\\/\\/127\\.0\\.0\\.1:\\d+${escapedPath}$`);
   let removed = 0;
   const nextEntries = entries.filter((entry) => {
     if (!entry || typeof entry !== "object") return true;
     // Only remove flat entries (type+url at top level, no nested hooks array)
     if (entry.type !== "http" || typeof entry.url !== "string") return true;
     if (entry.hooks) return true; // already nested format, not a flat entry
-    if (!CLYDE_PERM_URL.test(entry.url)) return true;
+    if (!endpointPattern.test(entry.url)) return true;
     removed++;
     return false;
   });
@@ -250,15 +259,21 @@ function getHookServerPort(explicitPort) {
   return Number.isInteger(explicitPort) ? explicitPort : (readRuntimePort() || DEFAULT_SERVER_PORT);
 }
 
-// HTTP hooks: PermissionRequest uses bidirectional HTTP hook for permission decisions.
-// Claude Code fires PermissionRequest for tools needing approval (primarily Bash).
-// Edit/Write permissions are handled by Claude Code's own permission mode — not our hook.
+// HTTP hooks: PermissionRequest and Elicitation use bidirectional HTTP hooks.
 const HTTP_HOOKS = {
   PermissionRequest: {
     matcher: "",
     hook: {
       type: "http",
-      url: "http://127.0.0.1:23333/permission",
+      path: PERMISSION_PATH,
+      timeout: 600,
+    },
+  },
+  Elicitation: {
+    matcher: "",
+    hook: {
+      type: "http",
+      path: ELICITATION_PATH,
       timeout: 600,
     },
   },
@@ -470,15 +485,19 @@ function registerHooks(options = {}) {
       changed = true;
     }
 
-    const flatCleanup = removeFlatHttpHooks(settings.hooks[event]);
+    const flatCleanup = removeFlatHttpHooks(settings.hooks[event], hook.path);
     if (flatCleanup.changed) {
       settings.hooks[event] = flatCleanup.entries;
       migrated += flatCleanup.removed;
       changed = true;
     }
 
-    const desiredHook = { ...hook, url: buildPermissionUrl(hookPort) };
-    const httpSync = syncHttpHook(settings.hooks[event], desiredHook.url);
+    const desiredHook = {
+      ...hook,
+      url: hook.path === ELICITATION_PATH ? buildElicitationUrl(hookPort) : buildPermissionUrl(hookPort),
+    };
+    delete desiredHook.path;
+    const httpSync = syncHttpHook(settings.hooks[event], hook.path, desiredHook.url);
     if (httpSync.found) {
       if (httpSync.changed) {
         updated++;

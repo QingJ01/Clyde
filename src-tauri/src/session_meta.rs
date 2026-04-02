@@ -445,13 +445,19 @@ mod tests {
     #[test]
     fn strips_resume_prefix_from_inline_summary() {
         let raw = "/resume 修一下 permission request 的交互样式";
-        assert_eq!(clean_resume_summary(raw), "修一下 permission request 的交互样式");
+        assert_eq!(
+            clean_resume_summary(raw),
+            "修一下 permission request 的交互样式"
+        );
     }
 
     #[test]
     fn skips_resume_only_line_and_uses_following_summary() {
         let raw = "/resume\n修一下 permission request 的交互样式";
-        assert_eq!(clean_resume_summary(raw), "修一下 permission request 的交互样式");
+        assert_eq!(
+            clean_resume_summary(raw),
+            "修一下 permission request 的交互样式"
+        );
     }
 
     #[test]

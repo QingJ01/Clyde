@@ -191,6 +191,11 @@ fn trigger_mode_notice(app: &AppHandle, _session_id: &str, mode: &PermissionMode
         session_project: display.project,
         session_short_id: display.short_id,
         is_elicitation: false,
+        elicitation_message: None,
+        elicitation_schema: None,
+        elicitation_mode: None,
+        elicitation_url: None,
+        elicitation_server_name: None,
         mode_label: Some(format!("{} {}", mode.icon(), mode.label(lang))),
         mode_description: Some(mode.description(lang).to_string()),
     };

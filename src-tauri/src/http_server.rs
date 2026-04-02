@@ -21,8 +21,8 @@ pub const CLYDE_SERVER_HEADER: &str = "x-clyde-server";
 pub const CLYDE_SERVER_ID: &str = "clyde-on-desk";
 pub const DEFAULT_PORT: u16 = 23333;
 
-pub type PermSender = oneshot::Sender<PermDecision>;
-pub type PendingPerms = Arc<Mutex<HashMap<String, PermSender>>>;
+pub type PendingHookSender = oneshot::Sender<HookDecision>;
+pub type PendingPerms = Arc<Mutex<HashMap<String, PendingHookSender>>>;
 pub type ApprovalQueue = Arc<Mutex<ApprovalQueueState>>;
 
 #[derive(Debug, Clone)]
@@ -30,6 +30,19 @@ pub enum PermDecision {
     Allow,
     Deny,
     AllowWithPermissions(Vec<serde_json::Value>),
+}
+
+#[derive(Debug, Clone)]
+pub enum ElicitationDecision {
+    Accept(Option<Value>),
+    Decline,
+    Cancel,
+}
+
+#[derive(Debug, Clone)]
+pub enum HookDecision {
+    Permission(PermDecision),
+    Elicitation(ElicitationDecision),
 }
 
 #[derive(Default)]
@@ -70,8 +83,237 @@ struct ClearPermissionPayload {
     demo_only: bool,
 }
 
+struct RequestDisplayMeta {
+    session_id: String,
+    agent_label: String,
+    session_summary: String,
+    session_project: String,
+    session_short_id: String,
+}
+
 // NOTE: We accept raw JSON for permission requests because Claude Code's
 // PermissionRequest hook payload format may vary. Fields are extracted manually.
+
+fn payload_value<'a>(payload: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    keys.iter().find_map(|key| payload.get(*key))
+}
+
+fn payload_value_nested<'a>(payload: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    if let Some(value) = payload_value(payload, keys) {
+        return Some(value);
+    }
+
+    let nested_keys = [
+        "request",
+        "params",
+        "input",
+        "hook_input",
+        "hookInput",
+        "hookSpecificInput",
+        "payload",
+        "data",
+        "elicitation",
+        "body",
+    ];
+
+    nested_keys.iter().find_map(|key| {
+        payload
+            .get(*key)
+            .and_then(|nested| payload_value_nested(nested, keys))
+    })
+}
+
+fn payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
+    payload_value(payload, keys).and_then(value_to_string)
+}
+
+fn payload_string_nested(payload: &Value, keys: &[&str]) -> Option<String> {
+    payload_value_nested(payload, keys).and_then(value_to_string)
+}
+
+fn value_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Value::Object(map) => {
+            for key in [
+                "text",
+                "message",
+                "content",
+                "title",
+                "prompt",
+                "description",
+            ] {
+                if let Some(text) = map.get(key).and_then(value_to_string) {
+                    return Some(text);
+                }
+            }
+            None
+        }
+        Value::Array(items) => {
+            let combined = items
+                .iter()
+                .filter_map(value_to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let trimmed = combined.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn parse_json_string(value: &str) -> Option<Value> {
+    serde_json::from_str::<Value>(value.trim()).ok()
+}
+
+fn schema_from_explicit_options(items: &[Value]) -> Option<Value> {
+    let mut variants = Vec::new();
+
+    for item in items {
+        match item {
+            Value::String(text) => variants.push(json!({
+                "const": text,
+                "title": text,
+            })),
+            Value::Number(number) => variants.push(json!({
+                "const": number,
+                "title": number.to_string(),
+            })),
+            Value::Bool(boolean) => variants.push(json!({
+                "const": boolean,
+                "title": boolean.to_string(),
+            })),
+            Value::Object(map) => {
+                if map.contains_key("const") || map.contains_key("enum") {
+                    variants.push(item.clone());
+                    continue;
+                }
+
+                let value = map
+                    .get("value")
+                    .or_else(|| map.get("id"))
+                    .or_else(|| map.get("key"))
+                    .or_else(|| map.get("name"))
+                    .or_else(|| map.get("choice"))
+                    .cloned();
+                let Some(value) = value else {
+                    continue;
+                };
+
+                let mut variant = serde_json::Map::new();
+                variant.insert("const".to_string(), value.clone());
+
+                if let Some(title) = ["label", "title", "name", "text"]
+                    .iter()
+                    .find_map(|key| map.get(*key).and_then(value_to_string))
+                {
+                    variant.insert("title".to_string(), Value::String(title));
+                } else if let Some(title) = value_to_string(&value) {
+                    variant.insert("title".to_string(), Value::String(title));
+                }
+
+                if let Some(description) = ["description", "detail", "subtitle", "hint"]
+                    .iter()
+                    .find_map(|key| map.get(*key).and_then(value_to_string))
+                {
+                    variant.insert("description".to_string(), Value::String(description));
+                }
+
+                variants.push(Value::Object(variant));
+            }
+            _ => {}
+        }
+    }
+
+    (!variants.is_empty()).then(|| json!({ "oneOf": variants }))
+}
+
+fn normalized_schema_value(value: &Value) -> Option<Value> {
+    match value {
+        Value::Object(_) => Some(value.clone()),
+        Value::String(text) => {
+            let parsed = parse_json_string(text)?;
+            normalized_schema_value(&parsed)
+        }
+        Value::Array(items) => schema_from_explicit_options(items),
+        _ => None,
+    }
+}
+
+fn extract_requested_schema(payload: &Value) -> Option<Value> {
+    payload_value_nested(
+        payload,
+        &[
+            "requested_schema",
+            "requestedSchema",
+            "schema",
+            "input_schema",
+            "inputSchema",
+        ],
+    )
+    .and_then(normalized_schema_value)
+    .or_else(|| {
+        payload_value_nested(&payload, &["options", "choices", "responses", "items"])
+            .and_then(|value| value.as_array())
+            .and_then(|items| schema_from_explicit_options(items))
+    })
+}
+
+fn extract_request_display_meta(
+    ctx: &ServerCtx,
+    payload: &Value,
+    fallback_tool_input: &Value,
+    default_agent: &str,
+) -> RequestDisplayMeta {
+    let session_id = payload_string_nested(payload, &["session_id", "sessionId"])
+        .unwrap_or_else(|| "default".to_string());
+    let agent_label_override = payload_string_nested(payload, &["agent_label", "agentLabel"]);
+    let session_summary_override =
+        payload_string_nested(payload, &["session_summary", "sessionSummary"]);
+    let session_project_override =
+        payload_string_nested(payload, &["session_project", "sessionProject"]);
+    let session_short_id_override =
+        payload_string_nested(payload, &["session_short_id", "sessionShortId"]);
+    let fallback_agent = payload_string_nested(payload, &["agent_id", "agentId"])
+        .unwrap_or_else(|| default_agent.to_string());
+    let fallback_cwd = session_meta::extract_tool_cwd(fallback_tool_input);
+    let display = session_meta::ensure_session_display_meta(
+        &ctx.state,
+        &session_id,
+        Some(fallback_agent.as_str()),
+        fallback_cwd.as_deref(),
+    );
+
+    let raw_session_summary = session_summary_override.unwrap_or(display.summary);
+
+    RequestDisplayMeta {
+        session_id,
+        agent_label: agent_label_override.unwrap_or(display.agent_label),
+        session_summary: session_meta::clean_resume_summary(&raw_session_summary),
+        session_project: session_project_override.unwrap_or(display.project),
+        session_short_id: session_short_id_override.unwrap_or(display.short_id),
+    }
+}
+
+fn default_decision_for(bubble_data: &permission::BubbleData) -> HookDecision {
+    if bubble_data.is_elicitation {
+        HookDecision::Elicitation(ElicitationDecision::Cancel)
+    } else {
+        HookDecision::Permission(PermDecision::Deny)
+    }
+}
+
+fn request_is_elicitation(approval_queue: &ApprovalQueue, id: &str) -> bool {
+    approval_queue
+        .lock_or_recover()
+        .request_data
+        .get(id)
+        .map(|data| data.is_elicitation)
+        .unwrap_or(false)
+}
 
 async fn health(AxumState(_ctx): AxumState<ServerCtx>) -> Json<Value> {
     Json(json!({ "ok": true, "app": CLYDE_SERVER_ID }))
@@ -167,6 +409,85 @@ async fn post_state(
     (StatusCode::OK, headers, "ok".into())
 }
 
+async fn queue_request_and_wait(
+    ctx: &ServerCtx,
+    bubble_data: permission::BubbleData,
+) -> HookDecision {
+    let entry_id = bubble_data.id.clone();
+    let default_decision = default_decision_for(&bubble_data);
+    let bubble_session_id = bubble_data.session_id.clone();
+    let (tx, rx) = oneshot::channel::<HookDecision>();
+    ctx.pending_perms
+        .lock_or_recover()
+        .insert(entry_id.clone(), tx);
+
+    if !enqueue_permission_request(ctx, bubble_data) {
+        return default_decision;
+    }
+
+    let watchdog_ctx = ctx.clone();
+    let watchdog_id = entry_id.clone();
+    let watchdog_default = default_decision.clone();
+    let opened_at = std::time::Instant::now();
+    let session_existed_at_open = {
+        let sm = ctx.state.lock_or_recover();
+        sm.sessions.contains_key(&bubble_session_id)
+    };
+    let watchdog = tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
+        loop {
+            interval.tick().await;
+            let still_pending = watchdog_ctx
+                .pending_perms
+                .lock_or_recover()
+                .contains_key(&watchdog_id);
+            if !still_pending {
+                return;
+            }
+            let session_advanced = {
+                let sm = watchdog_ctx.state.lock_or_recover();
+                match sm.sessions.get(&bubble_session_id) {
+                    Some(entry) => entry.updated_at > opened_at,
+                    None => session_existed_at_open,
+                }
+            };
+            if session_advanced || tokio::time::Instant::now() > deadline {
+                break;
+            }
+        }
+
+        if let Some(tx) = watchdog_ctx
+            .pending_perms
+            .lock_or_recover()
+            .remove(&watchdog_id)
+        {
+            let _ = tx.send(watchdog_default);
+        }
+        close_permission_request_ui(
+            &watchdog_ctx.app,
+            &watchdog_ctx.pending_perms,
+            &watchdog_ctx.approval_queue,
+            &watchdog_ctx.bubble_map,
+            &watchdog_id,
+        );
+    });
+
+    let decision = rx.await.unwrap_or(default_decision);
+
+    watchdog.abort();
+    ctx.pending_perms.lock_or_recover().remove(&entry_id);
+    close_permission_request_ui(
+        &ctx.app,
+        &ctx.pending_perms,
+        &ctx.approval_queue,
+        &ctx.bubble_map,
+        &entry_id,
+    );
+
+    decision
+}
+
 async fn post_permission(
     AxumState(ctx): AxumState<ServerCtx>,
     Json(payload): Json<Value>,
@@ -183,84 +504,20 @@ async fn post_permission(
             .unwrap_or_default()
     );
 
-    // Extract fields — try both snake_case and camelCase variants
-    let tool_name = payload
-        .get("tool_name")
-        .or_else(|| payload.get("toolName"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let tool_input = payload
-        .get("tool_input")
-        .or_else(|| payload.get("toolInput"))
+    let tool_name = payload_string(&payload, &["tool_name", "toolName"])
+        .unwrap_or_else(|| "unknown".to_string());
+    let tool_input = payload_value(&payload, &["tool_input", "toolInput"])
         .cloned()
-        .unwrap_or(json!({}));
-    let session_id = payload
-        .get("session_id")
-        .or_else(|| payload.get("sessionId"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("default")
-        .to_string();
-    let suggestions = payload
-        .get("permission_suggestions")
-        .or_else(|| payload.get("permissionSuggestions"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let agent_label_override = payload
-        .get("agent_label")
-        .or_else(|| payload.get("agentLabel"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let session_summary_override = payload
-        .get("session_summary")
-        .or_else(|| payload.get("sessionSummary"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let session_project_override = payload
-        .get("session_project")
-        .or_else(|| payload.get("sessionProject"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let session_short_id_override = payload
-        .get("session_short_id")
-        .or_else(|| payload.get("sessionShortId"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let fallback_agent = payload
-        .get("agent_id")
-        .or_else(|| payload.get("agentId"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| "claude-code".to_string());
-    let fallback_cwd = session_meta::extract_tool_cwd(&tool_input);
-    let display = session_meta::ensure_session_display_meta(
-        &ctx.state,
-        &session_id,
-        Some(fallback_agent.as_str()),
-        fallback_cwd.as_deref(),
-    );
-    let agent_label = agent_label_override.unwrap_or(display.agent_label);
-    let raw_session_summary = session_summary_override.unwrap_or(display.summary);
-    let session_summary = session_meta::clean_resume_summary(&raw_session_summary);
-    let session_project = session_project_override.unwrap_or(display.project);
-    let session_short_id = session_short_id_override.unwrap_or(display.short_id);
-
+        .unwrap_or_else(|| json!({}));
+    let suggestions = payload_value(
+        &payload,
+        &["permission_suggestions", "permissionSuggestions"],
+    )
+    .and_then(|value| value.as_array())
+    .cloned()
+    .unwrap_or_default();
+    let display = extract_request_display_meta(&ctx, &payload, &tool_input, "claude-code");
     let entry_id = uuid::Uuid::new_v4().to_string();
-    let (tx, rx) = oneshot::channel::<PermDecision>();
-    ctx.pending_perms
-        .lock_or_recover()
-        .insert(entry_id.clone(), tx);
 
     let bubble_data = permission::BubbleData {
         id: entry_id.clone(),
@@ -268,97 +525,96 @@ async fn post_permission(
         tool_name,
         tool_input,
         suggestions,
-        session_id,
-        agent_label,
-        session_summary,
-        session_project,
-        session_short_id,
+        session_id: display.session_id,
+        agent_label: display.agent_label,
+        session_summary: display.session_summary,
+        session_project: display.session_project,
+        session_short_id: display.session_short_id,
         is_elicitation: false,
+        elicitation_message: None,
+        elicitation_schema: None,
+        elicitation_mode: None,
+        elicitation_url: None,
+        elicitation_server_name: None,
         mode_label: None,
         mode_description: None,
     };
-    let bubble_session_id = bubble_data.session_id.clone();
-
-    if !enqueue_permission_request(&ctx, bubble_data) {
-        return (
-            StatusCode::OK,
-            headers,
-            Json(perm_response(&PermDecision::Deny)),
-        );
-    }
-
-    // Wait for user to click in bubble, or timeout.
-    // Auto-close: a background watcher (see spawn below) checks if the HTTP client
-    // disconnected by probing whether the tx was consumed. When the terminal answers
-    // first, Claude Code drops the TCP connection. Since Axum does NOT cancel handlers
-    // on disconnect, we spawn a watchdog that closes the bubble and drops tx after
-    // detecting no resolution within a short grace period after session state changes.
-    let watchdog_ctx = ctx.clone();
-    let watchdog_id = entry_id.clone();
-    let watchdog_session_id = bubble_session_id;
-    let opened_at = std::time::Instant::now();
-    let session_existed_at_open = {
-        let sm = ctx.state.lock_or_recover();
-        sm.sessions.contains_key(&watchdog_session_id)
+    let response = match queue_request_and_wait(&ctx, bubble_data).await {
+        HookDecision::Permission(decision) => perm_response(&decision),
+        HookDecision::Elicitation(_) => perm_response(&PermDecision::Deny),
     };
-    let watchdog = tauri::async_runtime::spawn(async move {
-        // Poll: if the pending_perm entry was removed (by resolve_permission from bubble click),
-        // this task is orphaned and will just exit. Otherwise, close bubble on timeout or
-        // when the session advances, which usually means the terminal handled the prompt.
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
-        loop {
-            interval.tick().await;
-            // Check if the entry was already resolved
-            let still_pending = watchdog_ctx
-                .pending_perms
-                .lock_or_recover()
-                .contains_key(&watchdog_id);
-            if !still_pending {
-                return;
-            } // resolved by user click — nothing to do
-            let session_advanced = {
-                let sm = watchdog_ctx.state.lock_or_recover();
-                match sm.sessions.get(&watchdog_session_id) {
-                    Some(entry) => entry.updated_at > opened_at,
-                    None => session_existed_at_open,
-                }
-            };
-            if session_advanced || tokio::time::Instant::now() > deadline {
-                break;
-            }
-        }
-        // Timeout: close bubble and send default deny
-        if let Some(tx) = watchdog_ctx
-            .pending_perms
-            .lock_or_recover()
-            .remove(&watchdog_id)
-        {
-            let _ = tx.send(PermDecision::Deny);
-        }
-        close_permission_request_ui(
-            &watchdog_ctx.app,
-            &watchdog_ctx.pending_perms,
-            &watchdog_ctx.approval_queue,
-            &watchdog_ctx.bubble_map,
-            &watchdog_id,
-        );
-    });
 
-    let decision = rx.await.unwrap_or(PermDecision::Deny);
+    (StatusCode::OK, headers, Json(response))
+}
 
-    // Clean up
-    watchdog.abort();
-    ctx.pending_perms.lock_or_recover().remove(&entry_id);
-    close_permission_request_ui(
-        &ctx.app,
-        &ctx.pending_perms,
-        &ctx.approval_queue,
-        &ctx.bubble_map,
-        &entry_id,
+async fn post_elicitation(
+    AxumState(ctx): AxumState<ServerCtx>,
+    Json(payload): Json<Value>,
+) -> (StatusCode, HeaderMap, Json<Value>) {
+    let mut headers = HeaderMap::new();
+    headers.insert(CLYDE_SERVER_HEADER, CLYDE_SERVER_ID.parse().unwrap());
+
+    eprintln!(
+        "Clyde: /elicitation payload keys: {:?}",
+        payload
+            .as_object()
+            .map(|o| o.keys().collect::<Vec<_>>())
+            .unwrap_or_default()
     );
 
-    (StatusCode::OK, headers, Json(perm_response(&decision)))
+    let tool_input = payload_value_nested(&payload, &["tool_input", "toolInput", "input"])
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let display = extract_request_display_meta(&ctx, &payload, &tool_input, "claude-code");
+    let elicitation_message = payload_string_nested(
+        &payload,
+        &["message", "prompt", "question", "title", "description"],
+    )
+    .or_else(|| {
+        payload_value_nested(&payload, &["request", "params", "input"]).and_then(value_to_string)
+    });
+    let elicitation_schema = extract_requested_schema(&payload);
+    let elicitation_mode =
+        payload_string_nested(&payload, &["mode", "elicitation_mode", "elicitationMode"]);
+    let elicitation_url = payload_string_nested(&payload, &["url", "href"]);
+    let elicitation_server_name = payload_string_nested(
+        &payload,
+        &[
+            "server_name",
+            "serverName",
+            "mcp_server_name",
+            "mcpServerName",
+        ],
+    );
+    let entry_id = uuid::Uuid::new_v4().to_string();
+
+    let bubble_data = permission::BubbleData {
+        id: entry_id,
+        window_kind: permission::WindowKind::ApprovalRequest,
+        tool_name: "Elicitation".to_string(),
+        tool_input,
+        suggestions: vec![],
+        session_id: display.session_id,
+        agent_label: display.agent_label,
+        session_summary: display.session_summary,
+        session_project: display.session_project,
+        session_short_id: display.session_short_id,
+        is_elicitation: true,
+        elicitation_message,
+        elicitation_schema,
+        elicitation_mode,
+        elicitation_url,
+        elicitation_server_name,
+        mode_label: None,
+        mode_description: None,
+    };
+
+    let response = match queue_request_and_wait(&ctx, bubble_data).await {
+        HookDecision::Elicitation(decision) => elicitation_response(&decision),
+        HookDecision::Permission(_) => elicitation_response(&ElicitationDecision::Cancel),
+    };
+
+    (StatusCode::OK, headers, Json(response))
 }
 
 async fn clear_permission_debug(
@@ -446,7 +702,7 @@ fn show_permission_or_deny(
     }
 
     if let Some(tx) = pending_perms.lock_or_recover().remove(&bubble_data.id) {
-        let _ = tx.send(PermDecision::Deny);
+        let _ = tx.send(default_decision_for(&bubble_data));
     }
 
     {
@@ -498,8 +754,15 @@ fn cancel_permission_request(
     bubble_map: &permission::BubbleMap,
     id: &str,
 ) {
+    let default_decision = approval_queue
+        .lock_or_recover()
+        .request_data
+        .get(id)
+        .cloned()
+        .map(|data| default_decision_for(&data))
+        .unwrap_or(HookDecision::Permission(PermDecision::Deny));
     if let Some(tx) = pending_perms.lock_or_recover().remove(id) {
-        let _ = tx.send(PermDecision::Deny);
+        let _ = tx.send(default_decision);
     }
     close_permission_request_ui(app, pending_perms, approval_queue, bubble_map, id);
 }
@@ -553,6 +816,24 @@ fn perm_response(decision: &PermDecision) -> Value {
     })
 }
 
+fn elicitation_response(decision: &ElicitationDecision) -> Value {
+    let response = match decision {
+        ElicitationDecision::Accept(Some(content)) => {
+            json!({ "action": "accept", "content": content })
+        }
+        ElicitationDecision::Accept(None) => json!({ "action": "accept" }),
+        ElicitationDecision::Decline => json!({ "action": "decline" }),
+        ElicitationDecision::Cancel => json!({ "action": "cancel" }),
+    };
+
+    json!({
+        "hookSpecificOutput": {
+            "hookEventName": "Elicitation",
+            "response": response
+        }
+    })
+}
+
 pub async fn start_server(
     app: AppHandle,
     state: SharedState,
@@ -574,6 +855,7 @@ pub async fn start_server(
         .route("/state", get(health))
         .route("/state", post(post_state))
         .route("/permission", post(post_permission))
+        .route("/elicitation", post(post_elicitation))
         .route("/permission/debug/clear", post(clear_permission_debug))
         .with_state(ctx);
 
@@ -625,15 +907,29 @@ pub fn resolve_permission(
     id: String,
     decision: String,
     selected_suggestion: Option<serde_json::Value>,
+    elicitation_content: Option<serde_json::Value>,
 ) {
+    let is_elicitation = request_is_elicitation(&approval_queue, &id);
     let tx = { pending.lock_or_recover().remove(&id) };
     if let Some(tx) = tx {
-        let perm_decision = match (decision.as_str(), selected_suggestion) {
-            ("allow", Some(sug)) => PermDecision::AllowWithPermissions(vec![sug]),
-            ("allow", None) => PermDecision::Allow,
-            _ => PermDecision::Deny,
+        let hook_decision = if is_elicitation {
+            match decision.as_str() {
+                "accept" | "allow" => {
+                    HookDecision::Elicitation(ElicitationDecision::Accept(elicitation_content))
+                }
+                "decline" => HookDecision::Elicitation(ElicitationDecision::Decline),
+                _ => HookDecision::Elicitation(ElicitationDecision::Cancel),
+            }
+        } else {
+            match (decision.as_str(), selected_suggestion) {
+                ("allow", Some(sug)) => {
+                    HookDecision::Permission(PermDecision::AllowWithPermissions(vec![sug]))
+                }
+                ("allow", None) => HookDecision::Permission(PermDecision::Allow),
+                _ => HookDecision::Permission(PermDecision::Deny),
+            }
         };
-        let _ = tx.send(perm_decision);
+        let _ = tx.send(hook_decision);
     }
     close_permission_request_ui(&app, &pending, &approval_queue, &bubbles, &id);
 }
@@ -677,5 +973,75 @@ mod tests {
         let perms = decision["updatedPermissions"].as_array().unwrap();
         assert_eq!(perms.len(), 1);
         assert_eq!(perms[0]["type"].as_str().unwrap(), "addRules");
+    }
+
+    #[test]
+    fn test_elicitation_response_accept() {
+        let resp = elicitation_response(&ElicitationDecision::Accept(Some(json!({
+            "choice": "Option A"
+        }))));
+        let response = &resp["hookSpecificOutput"]["response"];
+        assert_eq!(
+            resp["hookSpecificOutput"]["hookEventName"]
+                .as_str()
+                .unwrap(),
+            "Elicitation"
+        );
+        assert_eq!(response["action"].as_str().unwrap(), "accept");
+        assert_eq!(response["content"]["choice"].as_str().unwrap(), "Option A");
+    }
+
+    #[test]
+    fn test_elicitation_response_cancel() {
+        let resp = elicitation_response(&ElicitationDecision::Cancel);
+        let response = &resp["hookSpecificOutput"]["response"];
+        assert_eq!(response["action"].as_str().unwrap(), "cancel");
+        assert!(response.get("content").is_none());
+    }
+
+    #[test]
+    fn test_extract_requested_schema_from_nested_options() {
+        let payload = json!({
+            "request": {
+                "hookSpecificInput": {
+                    "prompt": "Pick one",
+                    "options": [
+                        {
+                            "value": "continue",
+                            "label": "Continue",
+                            "description": "Apply the plan"
+                        },
+                        {
+                            "value": "revise",
+                            "label": "Revise",
+                            "description": "Make changes first"
+                        }
+                    ]
+                }
+            }
+        });
+
+        let schema = extract_requested_schema(&payload).expect("schema should be synthesized");
+        let options = schema["oneOf"].as_array().expect("oneOf options");
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0]["const"].as_str().unwrap(), "continue");
+        assert_eq!(options[0]["title"].as_str().unwrap(), "Continue");
+        assert_eq!(options[1]["const"].as_str().unwrap(), "revise");
+    }
+
+    #[test]
+    fn test_extract_requested_schema_from_stringified_schema() {
+        let payload = json!({
+            "params": {
+                "requested_schema": "{\"type\":\"string\",\"oneOf\":[{\"const\":\"a\",\"title\":\"Option A\"},{\"const\":\"b\",\"title\":\"Option B\"}]}"
+            }
+        });
+
+        let schema = extract_requested_schema(&payload).expect("schema should parse from string");
+        assert_eq!(schema["type"].as_str().unwrap(), "string");
+        let options = schema["oneOf"].as_array().expect("oneOf options");
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0]["title"].as_str().unwrap(), "Option A");
+        assert_eq!(options[1]["const"].as_str().unwrap(), "b");
     }
 }
