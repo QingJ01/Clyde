@@ -2,7 +2,7 @@ use crate::util::MutexExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{window::Color, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 pub type BubbleMap = Arc<Mutex<HashMap<String, BubbleEntry>>>;
 
@@ -59,7 +59,8 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
     let window = builder.build();
 
     match window {
-        Ok(_) => {
+        Ok(window) => {
+            let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
             bubbles.lock_or_recover().insert(
                 id,
                 BubbleEntry {
