@@ -12,6 +12,7 @@ mod claude_monitor;
 mod permission;
 mod permission_mode;
 mod focus;
+mod macos_spaces;
 mod util;
 
 use std::collections::HashMap;
@@ -548,6 +549,7 @@ fn setup_pet_window(app: &AppHandle, prefs: &prefs::Prefs) {
     let _ = pet.set_position(PhysicalPosition::new(prefs.x, prefs.y));
     let (w, h) = prefs::size_to_pixels(&prefs.size);
     let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
+    macos_spaces::apply_space_follow(&pet);
     if let Err(e) = pet.show() {
         eprintln!("Clyde: pet.show() failed: {e}");
     }
@@ -569,6 +571,9 @@ fn setup_hit_window(app: &AppHandle, prefs: &prefs::Prefs) {
     // where the window hasn't fully rendered yet at startup).
     let bounds = windows::startup_pet_bounds(prefs);
     windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
+    if let Some(hit) = app.get_webview_window("hit") {
+        macos_spaces::apply_space_follow(&hit);
+    }
     windows::show_hit_window(app);
     println!("Clyde: hit window synced to startup bounds");
 }
@@ -583,6 +588,37 @@ fn setup_tray(app: &AppHandle, prefs: &prefs::Prefs, shared_tray: &tray::SharedT
             Err(e) => eprintln!("Clyde: tray error: {e}"),
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn setup_active_space_observer(app: &AppHandle, bubbles: permission::BubbleMap) {
+    let app_for_space = app.clone();
+    macos_spaces::install_active_space_observer(move || {
+        let app_for_main = app_for_space.clone();
+        let bubbles_for_main = bubbles.clone();
+        let _ = app_for_space.run_on_main_thread(move || {
+            if let Some(pet) = app_for_main.get_webview_window("pet") {
+                macos_spaces::refresh_space_follow(&pet);
+            }
+            if let Some(hit) = app_for_main.get_webview_window("hit") {
+                macos_spaces::refresh_space_follow(&hit);
+            }
+
+            let bubble_ids: Vec<String> = bubbles_for_main
+                .lock_or_recover()
+                .keys()
+                .cloned()
+                .collect();
+            for id in bubble_ids {
+                if let Some(win) = app_for_main.get_webview_window(&format!("bubble-{id}")) {
+                    macos_spaces::refresh_space_follow(&win);
+                }
+            }
+
+            sync_hit(&app_for_main);
+            permission::reposition_bubbles(&app_for_main, &bubbles_for_main);
+        });
+    });
 }
 
 fn start_cleanup_loop(app: &AppHandle, state: SharedState) {
@@ -651,6 +687,8 @@ pub fn run() {
             setup_pet_window(app.handle(), &prefs);
             setup_hit_window(app.handle(), &prefs);
             setup_tray(app.handle(), &prefs, &shared_tray);
+            #[cfg(target_os = "macos")]
+            setup_active_space_observer(app.handle(), bubble_map.clone());
 
             // Save position on close
             if let Some(pet_win) = app.get_webview_window("pet") {
