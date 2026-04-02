@@ -21,6 +21,7 @@
     lang: string;
     size: string;
     opacity: number;
+    permission_decision_window_secs: number;
     position_locked: boolean;
     click_through: boolean;
     auto_hide_fullscreen: boolean;
@@ -51,7 +52,7 @@
     const zh: Record<string, string> = {
       size: '大小', miniMode: '极简模式', dnd: '勿扰模式',
       restoreInteraction: '恢复交互',
-      opacity: '透明度', lockPosition: '锁定位置', clickThrough: '点击穿透',
+      opacity: '透明度', permissionWaitTime: '权限等待时间', lockPosition: '锁定位置', clickThrough: '点击穿透',
       hideOnFullscreen: '全屏时自动隐藏', autoDndMeetings: '会议/共享时自动勿扰',
       autoStart: '随 Claude Code 启动', sessions: '会话', language: '语言', quit: '退出',
       clickThroughHint: '开启后可从托盘菜单的“恢复交互”关闭',
@@ -60,7 +61,7 @@
     const en: Record<string, string> = {
       size: 'Size', miniMode: 'Mini Mode', dnd: 'Sleep (Do Not Disturb)',
       restoreInteraction: 'Restore Interaction',
-      opacity: 'Opacity', lockPosition: 'Lock Position', clickThrough: 'Click Through',
+      opacity: 'Opacity', permissionWaitTime: 'Permission Wait Time', lockPosition: 'Lock Position', clickThrough: 'Click Through',
       hideOnFullscreen: 'Hide on Fullscreen', autoDndMeetings: 'Auto DND During Meetings',
       autoStart: 'Start with Claude Code', sessions: 'Sessions', language: 'Language', quit: 'Quit',
       clickThroughHint: 'Turn it off from the tray menu with Restore Interaction',
@@ -93,6 +94,11 @@
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
     return `${Math.floor(seconds / 86400)}d ago`;
+  }
+
+  function durationLabel(seconds: number): string {
+    if (!data) return `${seconds}s`;
+    return data.lang === 'zh' ? `${seconds}秒` : `${seconds}s`;
   }
 
   function agentMeta(agent: string): { label: string; kind: string } {
@@ -182,6 +188,19 @@
       <div class="submenu">
         {#each [100, 90, 80, 70, 60, 50, 40] as level}
           <button class="item" class:checked={data.opacity === level} onclick={() => action(`opacity-${level}`)}>{level}%</button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
+  <div class="item has-sub" role="button" tabindex="-1" onmouseenter={() => activeSubmenu = 'permission-wait'} onmouseleave={() => activeSubmenu = null}>
+    <span>{t('permissionWaitTime')}</span>
+    <span class="value">{durationLabel(data.permission_decision_window_secs)}</span>
+    <span class="arrow">›</span>
+    {#if activeSubmenu === 'permission-wait'}
+      <div class="submenu">
+        {#each [12, 20, 30, 45, 60] as seconds}
+          <button class="item" class:checked={data.permission_decision_window_secs === seconds} onclick={() => action(`permission-timeout-${seconds}`)}>{durationLabel(seconds)}</button>
         {/each}
       </div>
     {/if}

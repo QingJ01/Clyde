@@ -67,6 +67,7 @@ struct MenuData {
     lang: String,
     size: String,
     opacity: u8,
+    permission_decision_window_secs: u16,
     position_locked: bool,
     click_through: bool,
     auto_hide_fullscreen: bool,
@@ -227,6 +228,15 @@ pub(crate) fn set_opacity(app: &AppHandle, opacity: f32) {
     prefs.opacity = prefs::normalize_opacity(opacity);
     prefs::save(app, &prefs);
     emit_pet_config(app, &prefs);
+}
+
+pub(crate) fn set_permission_decision_window_secs(app: &AppHandle, secs: u16) {
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return;
+    };
+    let mut prefs = prefs_state.lock_or_recover();
+    prefs.permission_decision_window_secs = prefs::normalize_permission_decision_window_secs(secs);
+    prefs::save(app, &prefs);
 }
 
 pub(crate) fn toggle_position_lock_pref(app: &AppHandle) {
@@ -517,6 +527,7 @@ fn show_context_menu(
     let click_through = p.click_through;
     let auto_hide_fullscreen = p.auto_hide_fullscreen;
     let auto_dnd_meetings = p.auto_dnd_meetings;
+    let permission_decision_window_secs = p.permission_decision_window_secs;
     let autostart = p.auto_start_with_claude;
     let environment_controls_supported = environment::controls_supported();
     drop(p);
@@ -574,6 +585,36 @@ fn show_context_menu(
         .map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
         .collect();
     if let Ok(sub) = Submenu::with_items(&app, i18n::t("opacity", &lang), true, &opacity_refs) {
+        items.push(Box::new(sub));
+    }
+
+    let mut permission_wait_items = Vec::new();
+    for secs in [12_u16, 20, 30, 45, 60] {
+        let label = if permission_decision_window_secs == secs {
+            format!("✓ {secs}s")
+        } else {
+            format!("{secs}s")
+        };
+        if let Ok(item) = MenuItem::with_id(
+            &app,
+            format!("ctx-permission-timeout-{secs}"),
+            label,
+            true,
+            None::<&str>,
+        ) {
+            permission_wait_items.push(item);
+        }
+    }
+    let permission_wait_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = permission_wait_items
+        .iter()
+        .map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
+        .collect();
+    if let Ok(sub) = Submenu::with_items(
+        &app,
+        i18n::t("permissionWaitTime", &lang),
+        true,
+        &permission_wait_refs,
+    ) {
         items.push(Box::new(sub));
     }
 
@@ -856,6 +897,7 @@ fn get_menu_data(
         lang: prefs.lang.clone(),
         size: prefs.size.clone(),
         opacity: (prefs.opacity * 100.0).round() as u8,
+        permission_decision_window_secs: prefs.permission_decision_window_secs,
         position_locked: prefs.lock_position,
         click_through: prefs.click_through,
         auto_hide_fullscreen: prefs.auto_hide_fullscreen,
@@ -1381,6 +1423,26 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
         }
         "opacity-40" => {
             set_opacity(app, 0.4);
+            refresh_tray = true;
+        }
+        "permission-timeout-12" => {
+            set_permission_decision_window_secs(app, 12);
+            refresh_tray = true;
+        }
+        "permission-timeout-20" => {
+            set_permission_decision_window_secs(app, 20);
+            refresh_tray = true;
+        }
+        "permission-timeout-30" => {
+            set_permission_decision_window_secs(app, 30);
+            refresh_tray = true;
+        }
+        "permission-timeout-45" => {
+            set_permission_decision_window_secs(app, 45);
+            refresh_tray = true;
+        }
+        "permission-timeout-60" => {
+            set_permission_decision_window_secs(app, 60);
             refresh_tray = true;
         }
         "lang-en" => tray::apply_lang_pub(app, "en"),

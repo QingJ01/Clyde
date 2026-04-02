@@ -60,6 +60,10 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
         .as_ref()
         .map(|prefs| prefs.auto_dnd_meetings)
         .unwrap_or(false);
+    let permission_decision_window_secs = prefs
+        .as_ref()
+        .map(|prefs| prefs.permission_decision_window_secs)
+        .unwrap_or(crate::prefs::DEFAULT_PERMISSION_DECISION_WINDOW_SECS);
     let environment_controls_supported = crate::environment::controls_supported();
     let autostart_enabled = prefs
         .as_ref()
@@ -121,6 +125,32 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
         .map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
         .collect();
     let opacity_sub = Submenu::with_items(app, t("opacity", lang), true, &opacity_refs)?;
+
+    let mut permission_wait_items = Vec::new();
+    for secs in [12_u16, 20, 30, 45, 60] {
+        let label = if permission_decision_window_secs == secs {
+            format!("✓ {secs}s")
+        } else {
+            format!("{secs}s")
+        };
+        permission_wait_items.push(MenuItem::with_id(
+            app,
+            format!("permission-timeout-{secs}"),
+            label,
+            true,
+            None::<&str>,
+        )?);
+    }
+    let permission_wait_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = permission_wait_items
+        .iter()
+        .map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
+        .collect();
+    let permission_wait_sub = Submenu::with_items(
+        app,
+        t("permissionWaitTime", lang),
+        true,
+        &permission_wait_refs,
+    )?;
 
     let en_label = if lang == "en" {
         "✓ English"
@@ -203,6 +233,7 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
             &auto_dnd,
             &size_sub,
             &opacity_sub,
+            &permission_wait_sub,
             &lang_sub,
             &autostart,
             &quit,
@@ -336,6 +367,18 @@ fn handle_tray_event(app: &AppHandle, id: &str) {
                 .and_then(|value| value.parse::<u32>().ok())
                 .unwrap_or(100);
             crate::set_opacity(app, pct as f32 / 100.0);
+            rebuild_current_menu(app);
+        }
+        "permission-timeout-12"
+        | "permission-timeout-20"
+        | "permission-timeout-30"
+        | "permission-timeout-45"
+        | "permission-timeout-60" => {
+            let secs = id
+                .strip_prefix("permission-timeout-")
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(crate::prefs::DEFAULT_PERMISSION_DECISION_WINDOW_SECS);
+            crate::set_permission_decision_window_secs(app, secs);
             rebuild_current_menu(app);
         }
         "lang-en" | "lang-zh" => {

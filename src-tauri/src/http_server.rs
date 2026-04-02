@@ -14,12 +14,17 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use tauri::AppHandle;
+use std::time::Duration;
+use tauri::{AppHandle, Manager};
 use tokio::sync::oneshot;
 
 pub const CLYDE_SERVER_HEADER: &str = "x-clyde-server";
 pub const CLYDE_SERVER_ID: &str = "clyde-on-desk";
 pub const DEFAULT_PORT: u16 = 23333;
+const REQUEST_WATCHDOG_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+const REQUEST_DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+const REQUEST_DEFAULT_DECISION_WINDOW: std::time::Duration =
+    std::time::Duration::from_secs(crate::prefs::DEFAULT_PERMISSION_DECISION_WINDOW_SECS as u64);
 
 pub type PendingHookSender = oneshot::Sender<HookDecision>;
 pub type PendingPerms = Arc<Mutex<HashMap<String, PendingHookSender>>>;
@@ -315,6 +320,26 @@ fn request_is_elicitation(approval_queue: &ApprovalQueue, id: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn should_auto_resolve_request(
+    session_advanced: bool,
+    now: tokio::time::Instant,
+    session_advance_grace_deadline: tokio::time::Instant,
+    request_deadline: tokio::time::Instant,
+) -> bool {
+    now >= request_deadline || (session_advanced && now >= session_advance_grace_deadline)
+}
+
+fn request_decision_window(app: &AppHandle) -> Duration {
+    app.try_state::<crate::prefs::SharedPrefs>()
+        .map(|prefs: tauri::State<crate::prefs::SharedPrefs>| {
+            let secs = crate::prefs::normalize_permission_decision_window_secs(
+                prefs.lock_or_recover().permission_decision_window_secs,
+            ) as u64;
+            Duration::from_secs(secs)
+        })
+        .unwrap_or(REQUEST_DEFAULT_DECISION_WINDOW)
+}
+
 async fn health(AxumState(_ctx): AxumState<ServerCtx>) -> Json<Value> {
     Json(json!({ "ok": true, "app": CLYDE_SERVER_ID }))
 }
@@ -429,13 +454,15 @@ async fn queue_request_and_wait(
     let watchdog_id = entry_id.clone();
     let watchdog_default = default_decision.clone();
     let opened_at = std::time::Instant::now();
+    let session_advance_grace_deadline =
+        tokio::time::Instant::now() + request_decision_window(&ctx.app);
     let session_existed_at_open = {
         let sm = ctx.state.lock_or_recover();
         sm.sessions.contains_key(&bubble_session_id)
     };
     let watchdog = tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
+        let mut interval = tokio::time::interval(REQUEST_WATCHDOG_POLL_INTERVAL);
+        let request_deadline = tokio::time::Instant::now() + REQUEST_DEFAULT_TIMEOUT;
         loop {
             interval.tick().await;
             let still_pending = watchdog_ctx
@@ -452,7 +479,12 @@ async fn queue_request_and_wait(
                     None => session_existed_at_open,
                 }
             };
-            if session_advanced || tokio::time::Instant::now() > deadline {
+            if should_auto_resolve_request(
+                session_advanced,
+                tokio::time::Instant::now(),
+                session_advance_grace_deadline,
+                request_deadline,
+            ) {
                 break;
             }
         }
@@ -1043,5 +1075,33 @@ mod tests {
         assert_eq!(options.len(), 2);
         assert_eq!(options[0]["title"].as_str().unwrap(), "Option A");
         assert_eq!(options[1]["const"].as_str().unwrap(), "b");
+    }
+
+    #[test]
+    fn test_should_not_auto_resolve_before_min_decision_window() {
+        let now = tokio::time::Instant::now();
+        let grace_deadline = now + std::time::Duration::from_secs(12);
+        let request_deadline = now + std::time::Duration::from_secs(300);
+
+        assert!(!should_auto_resolve_request(
+            true,
+            now + std::time::Duration::from_secs(2),
+            grace_deadline,
+            request_deadline,
+        ));
+    }
+
+    #[test]
+    fn test_should_auto_resolve_after_min_decision_window_when_session_advanced() {
+        let now = tokio::time::Instant::now();
+        let grace_deadline = now + std::time::Duration::from_secs(12);
+        let request_deadline = now + std::time::Duration::from_secs(300);
+
+        assert!(should_auto_resolve_request(
+            true,
+            now + std::time::Duration::from_secs(12),
+            grace_deadline,
+            request_deadline,
+        ));
     }
 }
