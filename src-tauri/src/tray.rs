@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem, Submenu},
-    tray::{TrayIcon, TrayIconBuilder},
+    tray::{TrayIcon, TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState},
     AppHandle, Emitter, Manager,
 };
 use crate::i18n::t;
@@ -14,6 +14,11 @@ use crate::windows;
 pub type SharedTray = Arc<Mutex<Option<TrayIcon>>>;
 
 fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
+    // Show/Hide toggle — label depends on current hidden state
+    let hidden = crate::is_hidden(app);
+    let visibility_label = if hidden { t("show", lang) } else { t("hide", lang) };
+    let visibility = MenuItem::with_id(app, "toggle-visibility", &visibility_label, true, None::<&str>)?;
+
     let quit   = MenuItem::with_id(app, "quit",   t("quit", lang),   true, None::<&str>)?;
     let dnd    = MenuItem::with_id(app, "dnd",    t("dnd", lang),    true, None::<&str>)?;
     let size_s = MenuItem::with_id(app, "size-s", "S",               true, None::<&str>)?;
@@ -30,7 +35,7 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
     let mini = MenuItem::with_id(app, "mini", t("mini", lang), true, None::<&str>)?;
     let autostart = MenuItem::with_id(app, "autostart", t("autoStart", lang), true, None::<&str>)?;
 
-    Menu::with_items(app, &[&dnd, &mini, &size_sub, &lang_sub, &autostart, &quit])
+    Menu::with_items(app, &[&visibility, &dnd, &mini, &size_sub, &lang_sub, &autostart, &quit])
 }
 
 pub fn build_tray(app: &AppHandle, lang: &str) -> tauri::Result<TrayIcon> {
@@ -43,6 +48,16 @@ pub fn build_tray(app: &AppHandle, lang: &str) -> tauri::Result<TrayIcon> {
         })
         .menu(&menu)
         .on_menu_event(|app, event| handle_tray_event(app, event.id().as_ref()))
+        .on_tray_icon_event(|tray, event| {
+            // On macOS, left-click opens the menu by default — avoid conflicting toggle.
+            // On Windows/Linux, left-click toggles visibility.
+            #[cfg(not(target_os = "macos"))]
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                crate::do_toggle_visibility(tray.app_handle());
+            }
+            #[cfg(target_os = "macos")]
+            { let _ = (&tray, &event); } // suppress unused warnings
+        })
         .build(app)
 }
 
@@ -92,6 +107,7 @@ fn apply_lang(app: &AppHandle, lang: &str) {
 fn handle_tray_event(app: &AppHandle, id: &str) {
     match id {
         "quit" => app.exit(0),
+        "toggle-visibility" => crate::do_toggle_visibility(app),
         "dnd"  => {
             if let Some(state) = app.try_state::<SharedState>() {
                 crate::do_toggle_dnd(app, &state);

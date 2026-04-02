@@ -33,6 +33,9 @@ const MINI_IDLE_DELAY_MS: u64 = 500;
 /// Any new sleep/wake/mini transition should cancel the previous one.
 pub type SleepAbortHandle = Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>;
 
+/// Whether the pet is hidden to system tray.
+pub type HiddenFlag = Arc<Mutex<bool>>;
+
 struct DragState {
     active:        bool,
     dragging:      bool,   // true once drag threshold is exceeded
@@ -297,8 +300,11 @@ fn show_context_menu(app: AppHandle, state: tauri::State<'_, SharedState>, prefs
         }
     }
 
-    // About + Quit
+    // Hide / About / Quit
     if let Ok(sep) = PredefinedMenuItem::separator(&app) { items.push(Box::new(sep)); }
+    if let Ok(hide) = MenuItem::with_id(&app, "ctx-hide", i18n::t("hide", &lang), true, None::<&str>) {
+        items.push(Box::new(hide));
+    }
     if let Ok(about) = MenuItem::with_id(&app, "ctx-about", i18n::t("about", &lang), true, None::<&str>) {
         items.push(Box::new(about));
     }
@@ -339,6 +345,61 @@ pub(crate) fn do_toggle_dnd(app: &AppHandle, state: &SharedState) {
 #[tauri::command]
 fn toggle_dnd(app: AppHandle, state: tauri::State<'_, SharedState>) {
     do_toggle_dnd(&app, &state);
+}
+
+/// Hide pet + hit + bubble windows to system tray.
+pub(crate) fn do_hide_to_tray(app: &AppHandle) {
+    if let Some(flag) = app.try_state::<HiddenFlag>() {
+        *flag.lock_or_recover() = true;
+    }
+    // Hide bubble windows (don't destroy — keeps pending permission requests alive)
+    if let Some(bubbles) = app.try_state::<permission::BubbleMap>() {
+        permission::hide_all_bubbles(app, &bubbles);
+    }
+    if let Some(pet) = app.get_webview_window("pet") { let _ = pet.hide(); }
+    if let Some(hit) = app.get_webview_window("hit") { let _ = hit.hide(); }
+    // Rebuild tray menu to reflect new state
+    let lang = app.try_state::<SharedPrefs>()
+        .map(|p| p.lock_or_recover().lang.clone())
+        .unwrap_or_else(|| "en".into());
+    tray::rebuild_menu(app, &lang);
+    println!("Clyde: hidden to tray");
+}
+
+/// Show pet + hit + bubble windows from system tray.
+pub(crate) fn do_show_from_tray(app: &AppHandle) {
+    if let Some(flag) = app.try_state::<HiddenFlag>() {
+        *flag.lock_or_recover() = false;
+    }
+    if let Some(pet) = app.get_webview_window("pet") { let _ = pet.show(); }
+    windows::show_hit_window(app);
+    // Re-sync hit window position (may have drifted during hide)
+    if let Some(bounds) = windows::get_pet_bounds(app) {
+        windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
+    }
+    // Restore bubble windows
+    if let Some(bubbles) = app.try_state::<permission::BubbleMap>() {
+        permission::show_all_bubbles(app, &bubbles);
+    }
+    let lang = app.try_state::<SharedPrefs>()
+        .map(|p| p.lock_or_recover().lang.clone())
+        .unwrap_or_else(|| "en".into());
+    tray::rebuild_menu(app, &lang);
+    println!("Clyde: restored from tray");
+}
+
+/// Toggle visibility — used from tray click and context menu.
+pub(crate) fn do_toggle_visibility(app: &AppHandle) {
+    let hidden = app.try_state::<HiddenFlag>()
+        .map(|f| *f.lock_or_recover())
+        .unwrap_or(false);
+    if hidden { do_show_from_tray(app); } else { do_hide_to_tray(app); }
+}
+
+pub(crate) fn is_hidden(app: &AppHandle) -> bool {
+    app.try_state::<HiddenFlag>()
+        .map(|f| *f.lock_or_recover())
+        .unwrap_or(false)
 }
 
 pub(crate) fn emit_state(app: &AppHandle, state_str: &str, svg: &str) {
@@ -530,6 +591,7 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
         "size-l"  => tray::apply_size_pub(app, "L"),
         "lang-en" => tray::apply_lang_pub(app, "en"),
         "lang-zh" => tray::apply_lang_pub(app, "zh"),
+        "hide"    => do_hide_to_tray(app),
         "about"   => { let _ = open::that("https://github.com/QingJ01/Clyde"); }
         "quit"    => app.exit(0),
         _ => {}
@@ -619,6 +681,7 @@ pub fn run() {
     let bubble_map: permission::BubbleMap = Arc::new(Mutex::new(HashMap::new()));
     let mode_tracker: permission_mode::ModeTracker = Arc::new(Mutex::new(HashMap::new()));
     let shared_tray: tray::SharedTray = Arc::new(Mutex::new(None));
+    let hidden_flag: HiddenFlag = Arc::new(Mutex::new(false));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {}))
@@ -630,6 +693,7 @@ pub fn run() {
         .manage(bubble_map.clone())
         .manage(mode_tracker.clone())
         .manage(shared_tray.clone())
+        .manage(hidden_flag)
         .invoke_handler(tauri::generate_handler![
             drag_start, drag_move, drag_end, exit_mini_mode,
             hit_double_click, hit_flail, show_context_menu,
@@ -652,17 +716,26 @@ pub fn run() {
             setup_hit_window(app.handle(), &prefs);
             setup_tray(app.handle(), &prefs, &shared_tray);
 
-            // Save position on close
+            // Intercept close → hide to tray (save position first)
             if let Some(pet_win) = app.get_webview_window("pet") {
                 let handle_for_close = app.handle().clone();
                 let shared_prefs_for_close = shared_prefs.clone();
                 pet_win.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        // Save position
                         if let Some(bounds) = windows::get_pet_bounds(&handle_for_close) {
                             let mut p = shared_prefs_for_close.lock_or_recover();
                             p.x = bounds.x;
                             p.y = bounds.y;
                             prefs::save(&handle_for_close, &p);
+                        }
+                        // Only hide to tray if tray icon exists; otherwise let close proceed (quit)
+                        let tray_exists = handle_for_close.try_state::<tray::SharedTray>()
+                            .map(|t| t.lock_or_recover().is_some())
+                            .unwrap_or(false);
+                        if tray_exists {
+                            api.prevent_close();
+                            do_hide_to_tray(&handle_for_close);
                         }
                     }
                 });

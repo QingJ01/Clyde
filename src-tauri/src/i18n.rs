@@ -15,6 +15,8 @@ pub fn t(key: &str, lang: &str) -> String {
         ("quit",            "zh") => "退出".into(),
         ("mini",            "zh") => "极简模式".into(),
         ("autoStart",       "zh") => "随 Claude Code 启动".into(),
+        ("hide",            "zh") => "隐藏到托盘".into(),
+        ("show",            "zh") => "显示 Clyde".into(),
         // English (default)
         ("sessionWorking",  _)    => "Working".into(),
         ("sessionThinking", _)    => "Thinking".into(),
@@ -31,6 +33,8 @@ pub fn t(key: &str, lang: &str) -> String {
         ("quit",            _)    => "Quit".into(),
         ("mini",            _)    => "Mini Mode".into(),
         ("autoStart",       _)    => "Start with Claude Code".into(),
+        ("hide",            _)    => "Hide to Tray".into(),
+        ("show",            _)    => "Show Clyde".into(),
         _                         => key.to_string(),
     }
 }

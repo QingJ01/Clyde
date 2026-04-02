@@ -36,6 +36,11 @@ const BUBBLE_MARGIN: u32 = 8;
 const BUBBLE_GAP: u32 = 6;
 
 pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bool {
+    // Auto-restore from tray when a permission request arrives
+    if crate::is_hidden(app) {
+        crate::do_show_from_tray(app);
+    }
+
     let id = data.id.clone();
     let label = format!("bubble-{}", id);
     let url = format!("src/windows/bubble/index.html?entry_id={id}");
@@ -56,10 +61,11 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
         .resizable(false)
         .visible(true);
 
-    // transparent() and shadow() are only available on Windows/Linux
+    builder = builder.shadow(false);
+    // transparent() is not available on macOS (handled by macOSPrivateApi)
     #[cfg(not(target_os = "macos"))]
     {
-        builder = builder.transparent(true).shadow(false);
+        builder = builder.transparent(true);
     }
 
     let window = builder.build();
@@ -73,6 +79,26 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
         Err(e) => {
             eprintln!("Clyde: failed to create bubble window: {e}");
             false
+        }
+    }
+}
+
+/// Hide all open bubble windows (without destroying them).
+pub fn hide_all_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
+    let ids: Vec<String> = bubbles.lock_or_recover().keys().cloned().collect();
+    for id in ids {
+        if let Some(win) = app.get_webview_window(&format!("bubble-{id}")) {
+            let _ = win.hide();
+        }
+    }
+}
+
+/// Show all open bubble windows.
+pub fn show_all_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
+    let ids: Vec<String> = bubbles.lock_or_recover().keys().cloned().collect();
+    for id in ids {
+        if let Some(win) = app.get_webview_window(&format!("bubble-{id}")) {
+            let _ = win.show();
         }
     }
 }
