@@ -11,6 +11,12 @@ struct EnvironmentSnapshot {
     meeting_or_share_active: bool,
 }
 
+pub const CONTROLS_SUPPORTED: bool = cfg!(target_os = "macos");
+
+pub fn controls_supported() -> bool {
+    CONTROLS_SUPPORTED
+}
+
 pub fn start_environment_loop(app: &AppHandle, state: SharedState) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {

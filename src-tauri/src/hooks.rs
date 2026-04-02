@@ -7,6 +7,7 @@ const COPILOT_HOOK_NAME: &str = "copilot-hook.js";
 const COPILOT_HOOK_CONTENT: &str = include_str!("../../hooks/copilot-hook.js");
 const AUTO_START_NAME: &str = "auto-start.js";
 const AUTO_START_CONTENT: &str = include_str!("../../hooks/auto-start.js");
+const AUTO_START_CONFIG_NAME: &str = "auto-start-config.json";
 
 // Embed hook scripts at compile time — works in both dev and production
 const HOOK_SCRIPT_CONTENT: &str = include_str!("../../hooks/clyde-hook.js");
@@ -17,12 +18,14 @@ pub struct HookInstaller {
     pub settings_path: Option<PathBuf>,
     /// HTTP server port for permission hook URL. None = skip permission hook registration.
     pub server_port: Option<u16>,
+    /// Whether SessionStart should auto-launch Clyde if it is not already running.
+    pub auto_start_enabled: bool,
 }
 
 impl HookInstaller {
     pub fn register(&self) -> Result<()> {
         // Step 1: Deploy hook scripts to ~/.claude/hooks/
-        let hook_dir = hook_dir()?;
+        let hook_dir = self.hook_dir()?;
         std::fs::create_dir_all(&hook_dir).context("creating hooks directory")?;
 
         let hook_path = hook_dir.join(HOOK_SCRIPT_NAME);
@@ -33,6 +36,10 @@ impl HookInstaller {
 
         let auto_start_path = hook_dir.join(AUTO_START_NAME);
         std::fs::write(&auto_start_path, AUTO_START_CONTENT).context("writing auto-start.js")?;
+        write_auto_start_config(
+            &hook_dir.join(AUTO_START_CONFIG_NAME),
+            self.auto_start_enabled,
+        )?;
 
         // Clean up legacy "clawd" files from previous versions
         let _ = std::fs::remove_file(hook_dir.join("clawd-hook.js"));
@@ -240,6 +247,21 @@ impl HookInstaller {
         std::fs::rename(&tmp, settings_path)?;
         Ok(())
     }
+
+    fn hook_dir(&self) -> Result<PathBuf> {
+        if let Some(settings_path) = self.settings_path.as_deref() {
+            if let Some(claude_dir) = settings_path.parent() {
+                return Ok(claude_dir.join("hooks"));
+            }
+        }
+        hook_dir()
+    }
+}
+
+pub fn sync_auto_start_config(enabled: bool) -> Result<()> {
+    let hook_dir = hook_dir()?;
+    std::fs::create_dir_all(&hook_dir).context("creating hooks directory")?;
+    write_auto_start_config(&hook_dir.join(AUTO_START_CONFIG_NAME), enabled)
 }
 
 fn claude_settings_path() -> Result<PathBuf> {
@@ -250,6 +272,18 @@ fn claude_settings_path() -> Result<PathBuf> {
 fn hook_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("cannot determine home directory")?;
     Ok(home.join(".claude").join("hooks"))
+}
+
+fn write_auto_start_config(path: &std::path::Path, enabled: bool) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("creating auto-start config directory")?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let payload = serde_json::json!({ "enabled": enabled });
+    std::fs::write(&tmp, serde_json::to_string_pretty(&payload)?)
+        .context("writing auto-start config")?;
+    std::fs::rename(&tmp, path).context("renaming auto-start config")?;
+    Ok(())
 }
 
 /// Check if the PermissionRequest hook in settings.json is correctly formatted.
@@ -285,15 +319,27 @@ pub fn permission_hook_is_healthy(settings: &serde_json::Value, expected_url: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_settings_path(test_name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("clyde-hooks-{test_name}-{suffix}"));
+        std::fs::create_dir_all(&dir).expect("create temp test dir");
+        dir.join("settings.json")
+    }
 
     #[test]
     fn test_register_adds_hook_entry() {
-        let tmp_file = std::env::temp_dir().join("clyde-test-settings-add.json");
+        let tmp_file = temp_settings_path("add");
         std::fs::write(&tmp_file, "{}").unwrap();
 
         let installer = HookInstaller {
             settings_path: Some(tmp_file.clone()),
             server_port: Some(23333),
+            auto_start_enabled: false,
         };
         installer.register().expect("register should succeed");
 
@@ -346,17 +392,18 @@ mod tests {
             .unwrap()
             .contains("/permission"));
 
-        let _ = std::fs::remove_file(&tmp_file);
+        let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
     }
 
     #[test]
     fn test_no_duplicate_registration() {
-        let tmp_file = std::env::temp_dir().join("clyde-test-settings-dedup.json");
+        let tmp_file = temp_settings_path("dedup");
         std::fs::write(&tmp_file, "{}").unwrap();
 
         let installer = HookInstaller {
             settings_path: Some(tmp_file.clone()),
             server_port: Some(23333),
+            auto_start_enabled: false,
         };
 
         installer.register().expect("first register should succeed");
@@ -377,12 +424,12 @@ mod tests {
         let perm_arr = parsed["hooks"]["PermissionRequest"].as_array().unwrap();
         assert_eq!(perm_arr.len(), 1, "PermissionRequest should not duplicate");
 
-        let _ = std::fs::remove_file(&tmp_file);
+        let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
     }
 
     #[test]
     fn test_permission_request_flat_entry_is_rewritten() {
-        let tmp_file = std::env::temp_dir().join("clyde-test-settings-flat-perm.json");
+        let tmp_file = temp_settings_path("flat-perm");
         // Seed with OLD flat PermissionRequest format
         let old_settings = serde_json::json!({
             "hooks": {
@@ -400,6 +447,7 @@ mod tests {
         let installer = HookInstaller {
             settings_path: Some(tmp_file.clone()),
             server_port: Some(23334), // different port to verify rewrite
+            auto_start_enabled: false,
         };
         installer.register().expect("register should succeed");
 
@@ -437,7 +485,7 @@ mod tests {
             "flat type field must not exist at top level"
         );
 
-        let _ = std::fs::remove_file(&tmp_file);
+        let _ = std::fs::remove_dir_all(tmp_file.parent().unwrap());
     }
 
     #[test]
@@ -494,5 +542,17 @@ mod tests {
             &settings,
             "http://127.0.0.1:23333/permission"
         ));
+    }
+
+    #[test]
+    fn test_write_auto_start_config_roundtrip() {
+        let tmp_file = std::env::temp_dir().join("clyde-test-auto-start-config.json");
+        write_auto_start_config(&tmp_file, true).expect("write config");
+
+        let contents = std::fs::read_to_string(&tmp_file).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(parsed["enabled"].as_bool(), Some(true));
+
+        let _ = std::fs::remove_file(&tmp_file);
     }
 }

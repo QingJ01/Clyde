@@ -185,8 +185,10 @@ impl StateMachine {
     }
 
     /// Session summaries for context menu display.
-    pub fn session_summaries(&self) -> Vec<(String, String, Option<u32>, String)> {
-        self.sessions
+    pub fn session_summaries(&self) -> Vec<(String, String, Option<u32>, String, u64)> {
+        let now = Instant::now();
+        let mut sessions: Vec<_> = self
+            .sessions
             .iter()
             .map(|(id, e)| {
                 (
@@ -194,9 +196,12 @@ impl StateMachine {
                     e.state.clone(),
                     e.source_pid,
                     e.agent_id.clone(),
+                    now.duration_since(e.updated_at).as_secs(),
                 )
             })
-            .collect()
+            .collect();
+        sessions.sort_by_key(|(_, _, _, _, age_secs)| *age_secs);
+        sessions
     }
 
     pub fn svg_for_state(&self, state: &str) -> String {
@@ -250,6 +255,7 @@ impl StateMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_empty_sessions_resolve_to_idle() {
@@ -370,5 +376,22 @@ mod tests {
         assert_eq!(sm.svg_for_state("thinking"), "clyde-working-thinking.svg");
         assert_eq!(sm.svg_for_state("error"), "clyde-error.svg");
         assert_eq!(sm.svg_for_state("sleeping"), "clyde-sleeping.svg");
+    }
+
+    #[test]
+    fn test_session_summaries_sorted_by_recency() {
+        let mut sm = StateMachine::new();
+        let mut older = SessionEntry::new("idle");
+        older.updated_at = Instant::now() - Duration::from_secs(30);
+        let mut newer = SessionEntry::new("working");
+        newer.updated_at = Instant::now() - Duration::from_secs(5);
+
+        sm.sessions.insert("older".into(), older);
+        sm.sessions.insert("newer".into(), newer);
+
+        let summaries = sm.session_summaries();
+        assert_eq!(summaries[0].0, "newer");
+        assert_eq!(summaries[1].0, "older");
+        assert!(summaries[0].4 <= summaries[1].4);
     }
 }

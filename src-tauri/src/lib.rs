@@ -52,6 +52,7 @@ struct MenuSession {
     state: String,
     agent: String,
     pid: Option<u32>,
+    updated_secs_ago: u64,
 }
 
 #[derive(Serialize)]
@@ -67,6 +68,7 @@ struct MenuData {
     auto_hide_fullscreen: bool,
     auto_dnd_meetings: bool,
     auto_start_with_claude: bool,
+    environment_controls_supported: bool,
 }
 
 struct DragState {
@@ -113,6 +115,59 @@ fn emit_interaction_state(app: &AppHandle, prefs: &prefs::Prefs) {
             click_through: prefs.click_through,
         },
     );
+}
+
+fn sync_autostart_pref(enabled: bool) {
+    if let Err(e) = hooks::sync_auto_start_config(enabled) {
+        eprintln!("Clyde: failed to sync auto-start config: {e}");
+    }
+}
+
+pub(crate) fn format_relative_time(age_secs: u64, lang: &str) -> String {
+    if age_secs < 10 {
+        return i18n::t("sessionJustNow", lang);
+    }
+    if age_secs < 60 {
+        return if lang == "zh" {
+            format!("{age_secs}秒前")
+        } else {
+            format!("{age_secs}s ago")
+        };
+    }
+
+    let minutes = age_secs / 60;
+    if minutes < 60 {
+        return if lang == "zh" {
+            format!("{minutes}分钟前")
+        } else {
+            format!("{minutes}m ago")
+        };
+    }
+
+    let hours = minutes / 60;
+    if lang == "zh" {
+        format!("{hours}小时前")
+    } else {
+        format!("{hours}h ago")
+    }
+}
+
+pub(crate) fn platform_limited_menu_label(
+    key: &str,
+    lang: &str,
+    checked: bool,
+    enabled: bool,
+) -> String {
+    let label = if checked {
+        format!("✓ {}", i18n::t(key, lang))
+    } else {
+        i18n::t(key, lang)
+    };
+    if enabled {
+        label
+    } else {
+        format!("{label} ({})", i18n::t("macOnly", lang))
+    }
 }
 
 fn apply_click_through(app: &AppHandle, enabled: bool) {
@@ -197,10 +252,16 @@ pub(crate) fn toggle_autostart_pref(app: &AppHandle) {
     };
     let mut prefs = prefs_state.lock_or_recover();
     prefs.auto_start_with_claude = !prefs.auto_start_with_claude;
+    let enabled = prefs.auto_start_with_claude;
     prefs::save(app, &prefs);
+    drop(prefs);
+    sync_autostart_pref(enabled);
 }
 
 pub(crate) fn toggle_auto_hide_fullscreen_pref(app: &AppHandle) {
+    if !environment::controls_supported() {
+        return;
+    }
     let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
         return;
     };
@@ -210,6 +271,9 @@ pub(crate) fn toggle_auto_hide_fullscreen_pref(app: &AppHandle) {
 }
 
 pub(crate) fn toggle_auto_dnd_meetings_pref(app: &AppHandle) {
+    if !environment::controls_supported() {
+        return;
+    }
     let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
         return;
     };
@@ -448,6 +512,7 @@ fn show_context_menu(
     let auto_hide_fullscreen = p.auto_hide_fullscreen;
     let auto_dnd_meetings = p.auto_dnd_meetings;
     let autostart = p.auto_start_with_claude;
+    let environment_controls_supported = environment::controls_supported();
     drop(p);
 
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
@@ -544,31 +609,33 @@ fn show_context_menu(
         items.push(Box::new(m));
     }
 
-    let fullscreen_label = if auto_hide_fullscreen {
-        format!("✓ {}", i18n::t("hideOnFullscreen", &lang))
-    } else {
-        i18n::t("hideOnFullscreen", &lang)
-    };
+    let fullscreen_label = platform_limited_menu_label(
+        "hideOnFullscreen",
+        &lang,
+        auto_hide_fullscreen,
+        environment_controls_supported,
+    );
     if let Ok(m) = MenuItem::with_id(
         &app,
         "ctx-hide-on-fullscreen",
         &fullscreen_label,
-        true,
+        environment_controls_supported,
         None::<&str>,
     ) {
         items.push(Box::new(m));
     }
 
-    let auto_dnd_label = if auto_dnd_meetings {
-        format!("✓ {}", i18n::t("autoDndMeetings", &lang))
-    } else {
-        i18n::t("autoDndMeetings", &lang)
-    };
+    let auto_dnd_label = platform_limited_menu_label(
+        "autoDndMeetings",
+        &lang,
+        auto_dnd_meetings,
+        environment_controls_supported,
+    );
     if let Ok(m) = MenuItem::with_id(
         &app,
         "ctx-auto-dnd-meetings",
         &auto_dnd_label,
-        true,
+        environment_controls_supported,
         None::<&str>,
     ) {
         items.push(Box::new(m));
@@ -613,7 +680,7 @@ fn show_context_menu(
             session_items.push(Box::new(no));
         }
     } else {
-        for (sid, sess_state, _pid, agent) in &sessions {
+        for (sid, sess_state, _pid, agent, age_secs) in &sessions {
             let icon = match sess_state.as_str() {
                 "working" | "typing" => "⚡",
                 "thinking" => "💭",
@@ -632,7 +699,7 @@ fn show_context_menu(
             };
             let label = format!(
                 "{icon} {agent}  {state_label}  {}",
-                i18n::t("sessionJustNow", &lang)
+                format_relative_time(*age_secs, &lang)
             );
             let item_id = format!("ctx-session-{}", sid);
             if let Ok(item) = MenuItem::with_id(&app, &item_id, &label, true, None::<&str>) {
@@ -731,12 +798,15 @@ fn get_menu_data(
     let sessions = sm
         .session_summaries()
         .into_iter()
-        .map(|(id, session_state, pid, agent)| MenuSession {
-            id,
-            state: session_state,
-            agent,
-            pid,
-        })
+        .map(
+            |(id, session_state, pid, agent, updated_secs_ago)| MenuSession {
+                id,
+                state: session_state,
+                agent,
+                pid,
+                updated_secs_ago,
+            },
+        )
         .collect();
     MenuData {
         sessions,
@@ -750,6 +820,7 @@ fn get_menu_data(
         auto_hide_fullscreen: prefs.auto_hide_fullscreen,
         auto_dnd_meetings: prefs.auto_dnd_meetings,
         auto_start_with_claude: prefs.auto_start_with_claude,
+        environment_controls_supported: environment::controls_supported(),
     }
 }
 
@@ -1258,6 +1329,7 @@ pub fn run() {
         .setup(move |app| {
             let prefs = prefs::load(app.handle());
             *shared_prefs.lock_or_recover() = prefs.clone();
+            sync_autostart_pref(prefs.auto_start_with_claude);
 
             setup_pet_window(app.handle(), &prefs);
             setup_hit_window(app.handle());
@@ -1286,10 +1358,15 @@ pub fn run() {
                 let perms_clone = pending_perms.clone();
                 let bubbles_clone = bubble_map.clone();
                 let mode_clone = mode_tracker.clone();
+                let auto_start_enabled = prefs.auto_start_with_claude;
                 tauri::async_runtime::spawn(async move {
                     match http_server::start_server(handle.clone(), state_clone, perms_clone, bubbles_clone, mode_clone).await {
                         Some(port) => {
-                            let installer = hooks::HookInstaller { settings_path: None, server_port: Some(port) };
+                            let installer = hooks::HookInstaller {
+                                settings_path: None,
+                                server_port: Some(port),
+                                auto_start_enabled,
+                            };
                             if let Err(e) = installer.register() {
                                 eprintln!("Clyde: failed to register hooks: {e}");
                             } else {

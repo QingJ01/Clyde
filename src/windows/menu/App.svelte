@@ -8,6 +8,7 @@
     state: string;
     agent: string;
     pid: number | null;
+    updated_secs_ago: number;
   }
 
   interface MenuData {
@@ -22,6 +23,7 @@
     auto_hide_fullscreen: boolean;
     auto_dnd_meetings: boolean;
     auto_start_with_claude: boolean;
+    environment_controls_supported: boolean;
   }
 
   let data: MenuData | null = $state(null);
@@ -48,14 +50,14 @@
       opacity: '透明度', lockPosition: '锁定位置', clickThrough: '点击穿透',
       hideOnFullscreen: '全屏时自动隐藏', autoDndMeetings: '会议/共享时自动勿扰',
       autoStart: '随 Claude Code 启动', sessions: '会话', language: '语言', quit: '退出',
-      noSessions: '没有活跃会话', justNow: '刚刚',
+      noSessions: '没有活跃会话', justNow: '刚刚', macOnly: '仅 macOS',
     };
     const en: Record<string, string> = {
       size: 'Size', miniMode: 'Mini Mode', dnd: 'Sleep (Do Not Disturb)',
       opacity: 'Opacity', lockPosition: 'Lock Position', clickThrough: 'Click Through',
       hideOnFullscreen: 'Hide on Fullscreen', autoDndMeetings: 'Auto DND During Meetings',
       autoStart: 'Start with Claude Code', sessions: 'Sessions', language: 'Language', quit: 'Quit',
-      noSessions: 'No active sessions', justNow: 'just now',
+      noSessions: 'No active sessions', justNow: 'just now', macOnly: 'macOS only',
     };
     return (data.lang === 'zh' ? zh[key] : en[key]) ?? key;
   }
@@ -63,6 +65,27 @@
   function stateLabel(s: string): string {
     if (!data) return s;
     return (data.lang === 'zh' ? stateLabelsZh[s] : stateLabelsEn[s]) ?? s;
+  }
+
+  function platformLimitedLabel(key: string): string {
+    const label = t(key);
+    return data?.environment_controls_supported ? label : `${label} (${t('macOnly')})`;
+  }
+
+  function sessionAgeLabel(seconds: number): string {
+    if (!data) return t('justNow');
+    if (seconds < 5) return t('justNow');
+    if (data.lang === 'zh') {
+      if (seconds < 60) return `${seconds}秒前`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}分钟前`;
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)}小时前`;
+      return `${Math.floor(seconds / 86400)}天前`;
+    }
+
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
   }
 
   async function action(id: string) {
@@ -158,13 +181,23 @@
     {#if data.click_through}<span class="check">✓</span>{/if}
   </button>
 
-  <button class="item" onclick={() => action('hide-on-fullscreen')}>
-    <span>{t('hideOnFullscreen')}</span>
+  <button
+    class="item"
+    class:disabled={!data.environment_controls_supported}
+    onclick={() => action('hide-on-fullscreen')}
+    disabled={!data.environment_controls_supported}
+  >
+    <span>{platformLimitedLabel('hideOnFullscreen')}</span>
     {#if data.auto_hide_fullscreen}<span class="check">✓</span>{/if}
   </button>
 
-  <button class="item" onclick={() => action('auto-dnd-meetings')}>
-    <span>{t('autoDndMeetings')}</span>
+  <button
+    class="item"
+    class:disabled={!data.environment_controls_supported}
+    onclick={() => action('auto-dnd-meetings')}
+    disabled={!data.environment_controls_supported}
+  >
+    <span>{platformLimitedLabel('autoDndMeetings')}</span>
     {#if data.auto_dnd_meetings}<span class="check">✓</span>{/if}
   </button>
 
@@ -195,7 +228,7 @@
               <span class="session-icon">{stateIcons[sess.state] ?? '⚡'}</span>
               <span class="session-agent">{sess.agent}</span>
               <span class="session-state">{stateLabel(sess.state)}</span>
-              <span class="session-time">{t('justNow')}</span>
+              <span class="session-time">{sessionAgeLabel(sess.updated_secs_ago)}</span>
             </button>
           {/each}
         {/if}
@@ -264,7 +297,14 @@
     color: #999;
     cursor: default;
   }
+  .item:disabled {
+    color: #999;
+    cursor: default;
+  }
   .item.disabled:hover {
+    background: none;
+  }
+  .item:disabled:hover {
     background: none;
   }
   .item.quit {

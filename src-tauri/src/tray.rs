@@ -41,6 +41,7 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
         .as_ref()
         .map(|prefs| prefs.auto_dnd_meetings)
         .unwrap_or(false);
+    let environment_controls_supported = crate::environment::controls_supported();
     let autostart_enabled = prefs
         .as_ref()
         .map(|prefs| prefs.auto_start_with_claude)
@@ -138,24 +139,32 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
     };
     let click_through_item =
         MenuItem::with_id(app, "click-through", click_label, true, None::<&str>)?;
-    let fullscreen_label = if auto_hide_fullscreen {
-        format!("✓ {}", t("hideOnFullscreen", lang))
-    } else {
-        t("hideOnFullscreen", lang)
-    };
+    let fullscreen_label = crate::platform_limited_menu_label(
+        "hideOnFullscreen",
+        lang,
+        auto_hide_fullscreen,
+        environment_controls_supported,
+    );
     let fullscreen_hide = MenuItem::with_id(
         app,
         "hide-on-fullscreen",
         fullscreen_label,
-        true,
+        environment_controls_supported,
         None::<&str>,
     )?;
-    let auto_dnd_label = if auto_dnd_meetings {
-        format!("✓ {}", t("autoDndMeetings", lang))
-    } else {
-        t("autoDndMeetings", lang)
-    };
-    let auto_dnd = MenuItem::with_id(app, "auto-dnd-meetings", auto_dnd_label, true, None::<&str>)?;
+    let auto_dnd_label = crate::platform_limited_menu_label(
+        "autoDndMeetings",
+        lang,
+        auto_dnd_meetings,
+        environment_controls_supported,
+    );
+    let auto_dnd = MenuItem::with_id(
+        app,
+        "auto-dnd-meetings",
+        auto_dnd_label,
+        environment_controls_supported,
+        None::<&str>,
+    )?;
     let autostart_label = if autostart_enabled {
         format!("✓ {}", t("autoStart", lang))
     } else {
