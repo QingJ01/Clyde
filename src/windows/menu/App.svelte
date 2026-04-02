@@ -16,6 +16,12 @@
     is_mini: boolean;
     lang: string;
     size: string;
+    opacity: number;
+    position_locked: boolean;
+    click_through: boolean;
+    auto_hide_fullscreen: boolean;
+    auto_dnd_meetings: boolean;
+    auto_start_with_claude: boolean;
   }
 
   let data: MenuData | null = $state(null);
@@ -39,12 +45,16 @@
     if (!data) return key;
     const zh: Record<string, string> = {
       size: '大小', miniMode: '极简模式', dnd: '勿扰模式',
-      sessions: '会话', language: '语言', quit: '退出',
+      opacity: '透明度', lockPosition: '锁定位置', clickThrough: '点击穿透',
+      hideOnFullscreen: '全屏时自动隐藏', autoDndMeetings: '会议/共享时自动勿扰',
+      autoStart: '随 Claude Code 启动', sessions: '会话', language: '语言', quit: '退出',
       noSessions: '没有活跃会话', justNow: '刚刚',
     };
     const en: Record<string, string> = {
       size: 'Size', miniMode: 'Mini Mode', dnd: 'Sleep (Do Not Disturb)',
-      sessions: 'Sessions', language: 'Language', quit: 'Quit',
+      opacity: 'Opacity', lockPosition: 'Lock Position', clickThrough: 'Click Through',
+      hideOnFullscreen: 'Hide on Fullscreen', autoDndMeetings: 'Auto DND During Meetings',
+      autoStart: 'Start with Claude Code', sessions: 'Sessions', language: 'Language', quit: 'Quit',
       noSessions: 'No active sessions', justNow: 'just now',
     };
     return (data.lang === 'zh' ? zh[key] : en[key]) ?? key;
@@ -70,24 +80,35 @@
     activeSubmenu = activeSubmenu === name ? null : name;
   }
 
-  onMount(async () => {
-    data = await invoke('get_menu_data');
+  onMount(() => {
+    let unlistenFocus: (() => void) | undefined;
 
-    // Close on blur (click outside)
-    const win = getCurrentWindow();
-    const unlisten = await win.onFocusChanged(({ payload: focused }) => {
-      if (!focused && !closing) closeMenu();
-    });
+    const setup = async () => {
+      data = await invoke('get_menu_data');
 
-    // Close on Escape
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeMenu();
+      // Close on blur (click outside)
+      const win = getCurrentWindow();
+      unlistenFocus = await win.onFocusChanged(({ payload: focused }) => {
+        if (!focused && !closing) closeMenu();
+      });
+
+      // Close on Escape
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') closeMenu();
+      };
+      window.addEventListener('keydown', onKey);
+
+      return () => {
+        unlistenFocus?.();
+        window.removeEventListener('keydown', onKey);
+      };
     };
-    window.addEventListener('keydown', onKey);
+
+    let cleanup: (() => void) | undefined;
+    setup().then((fn) => { cleanup = fn; });
 
     return () => {
-      unlisten();
-      window.removeEventListener('keydown', onKey);
+      cleanup?.();
     };
   });
 </script>
@@ -95,7 +116,7 @@
 {#if data}
 <div class="menu">
   <!-- Size -->
-  <div class="item has-sub" onmouseenter={() => activeSubmenu = 'size'} onmouseleave={() => activeSubmenu = null}>
+  <div class="item has-sub" role="button" tabindex="-1" onmouseenter={() => activeSubmenu = 'size'} onmouseleave={() => activeSubmenu = null}>
     <span>{t('size')}</span>
     <span class="arrow">›</span>
     {#if activeSubmenu === 'size'}
@@ -113,16 +134,55 @@
     {#if data.is_mini}<span class="check">✓</span>{/if}
   </button>
 
+  <!-- Opacity -->
+  <div class="item has-sub" role="button" tabindex="-1" onmouseenter={() => activeSubmenu = 'opacity'} onmouseleave={() => activeSubmenu = null}>
+    <span>{t('opacity')}</span>
+    <span class="value">{data.opacity}%</span>
+    <span class="arrow">›</span>
+    {#if activeSubmenu === 'opacity'}
+      <div class="submenu">
+        {#each [100, 90, 80, 70, 60, 50, 40] as level}
+          <button class="item" class:checked={data.opacity === level} onclick={() => action(`opacity-${level}`)}>{level}%</button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
+  <button class="item" onclick={() => action('lock-position')}>
+    <span>{t('lockPosition')}</span>
+    {#if data.position_locked}<span class="check">✓</span>{/if}
+  </button>
+
+  <button class="item" onclick={() => action('click-through')}>
+    <span>{t('clickThrough')}</span>
+    {#if data.click_through}<span class="check">✓</span>{/if}
+  </button>
+
+  <button class="item" onclick={() => action('hide-on-fullscreen')}>
+    <span>{t('hideOnFullscreen')}</span>
+    {#if data.auto_hide_fullscreen}<span class="check">✓</span>{/if}
+  </button>
+
+  <button class="item" onclick={() => action('auto-dnd-meetings')}>
+    <span>{t('autoDndMeetings')}</span>
+    {#if data.auto_dnd_meetings}<span class="check">✓</span>{/if}
+  </button>
+
   <!-- DND -->
   <button class="item" onclick={() => action('dnd')}>
     <span>{t('dnd')}</span>
     {#if data.is_dnd}<span class="check">✓</span>{/if}
   </button>
 
+  <button class="item" onclick={() => action('autostart')}>
+    <span>{t('autoStart')}</span>
+    {#if data.auto_start_with_claude}<span class="check">✓</span>{/if}
+  </button>
+
   <div class="sep"></div>
 
   <!-- Sessions -->
-  <div class="item has-sub" onmouseenter={() => activeSubmenu = 'sessions'} onmouseleave={() => activeSubmenu = null}>
+  <div class="item has-sub" role="button" tabindex="-1" onmouseenter={() => activeSubmenu = 'sessions'} onmouseleave={() => activeSubmenu = null}>
     <span>{t('sessions')} ({data.sessions.length})</span>
     <span class="arrow">›</span>
     {#if activeSubmenu === 'sessions'}
@@ -146,7 +206,7 @@
   <div class="sep"></div>
 
   <!-- Language -->
-  <div class="item has-sub" onmouseenter={() => activeSubmenu = 'language'} onmouseleave={() => activeSubmenu = null}>
+  <div class="item has-sub" role="button" tabindex="-1" onmouseenter={() => activeSubmenu = 'language'} onmouseleave={() => activeSubmenu = null}>
     <span>{t('language')}</span>
     <span class="arrow">›</span>
     {#if activeSubmenu === 'language'}
@@ -226,6 +286,13 @@
     font-size: 16px;
     color: #aaa;
     font-weight: 300;
+  }
+
+  .value {
+    margin-left: auto;
+    margin-right: 10px;
+    color: #6b7280;
+    font-size: 12px;
   }
 
   .sep {

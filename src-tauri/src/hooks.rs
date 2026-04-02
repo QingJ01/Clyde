@@ -23,20 +23,16 @@ impl HookInstaller {
     pub fn register(&self) -> Result<()> {
         // Step 1: Deploy hook scripts to ~/.claude/hooks/
         let hook_dir = hook_dir()?;
-        std::fs::create_dir_all(&hook_dir)
-            .context("creating hooks directory")?;
+        std::fs::create_dir_all(&hook_dir).context("creating hooks directory")?;
 
         let hook_path = hook_dir.join(HOOK_SCRIPT_NAME);
-        std::fs::write(&hook_path, HOOK_SCRIPT_CONTENT)
-            .context("writing clyde-hook.js")?;
+        std::fs::write(&hook_path, HOOK_SCRIPT_CONTENT).context("writing clyde-hook.js")?;
 
         let config_path = hook_dir.join(SERVER_CONFIG_NAME);
-        std::fs::write(&config_path, SERVER_CONFIG_CONTENT)
-            .context("writing server-config.js")?;
+        std::fs::write(&config_path, SERVER_CONFIG_CONTENT).context("writing server-config.js")?;
 
         let auto_start_path = hook_dir.join(AUTO_START_NAME);
-        std::fs::write(&auto_start_path, AUTO_START_CONTENT)
-            .context("writing auto-start.js")?;
+        std::fs::write(&auto_start_path, AUTO_START_CONTENT).context("writing auto-start.js")?;
 
         // Clean up legacy "clawd" files from previous versions
         let _ = std::fs::remove_file(hook_dir.join("clawd-hook.js"));
@@ -46,15 +42,17 @@ impl HookInstaller {
         let settings_path = self.settings_path.as_deref().unwrap_or(&default_path);
 
         let mut settings: serde_json::Value = if settings_path.exists() {
-            let raw = std::fs::read_to_string(settings_path)
-                .context("reading settings.json")?;
+            let raw = std::fs::read_to_string(settings_path).context("reading settings.json")?;
             match serde_json::from_str(&raw) {
                 Ok(v) => v,
                 Err(e) => {
                     // Backup before overwriting — don't silently destroy user config
                     let backup = settings_path.with_extension("json.bak");
                     let _ = std::fs::copy(settings_path, &backup);
-                    eprintln!("Clyde: settings.json parse error ({e}), backed up to {}", backup.display());
+                    eprintln!(
+                        "Clyde: settings.json parse error ({e}), backed up to {}",
+                        backup.display()
+                    );
                     serde_json::json!({})
                 }
             }
@@ -63,16 +61,26 @@ impl HookInstaller {
         };
 
         const CORE_HOOKS: &[&str] = &[
-            "SessionStart", "SessionEnd", "UserPromptSubmit",
-            "PreToolUse", "PostToolUse", "PostToolUseFailure",
-            "Stop", "SubagentStart", "SubagentStop",
-            "Notification", "Elicitation", "WorktreeCreate",
+            "SessionStart",
+            "SessionEnd",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Stop",
+            "SubagentStart",
+            "SubagentStop",
+            "Notification",
+            "Elicitation",
+            "WorktreeCreate",
             "ConfigChange",
         ];
 
-        let obj = settings.as_object_mut()
+        let obj = settings
+            .as_object_mut()
             .context("settings.json must be a JSON object")?;
-        let hooks = obj.entry("hooks")
+        let hooks = obj
+            .entry("hooks")
             .or_insert_with(|| serde_json::json!({}))
             .as_object_mut()
             .context("hooks must be an object")?;
@@ -82,15 +90,17 @@ impl HookInstaller {
         for event in CORE_HOOKS {
             let hook_cmd = format!("node \"{}\" {}", hook_path.display(), event);
 
-            let arr = hooks.entry(*event)
-                .or_insert_with(|| serde_json::json!([]));
+            let arr = hooks.entry(*event).or_insert_with(|| serde_json::json!([]));
             if let Some(list) = arr.as_array_mut() {
                 // Remove old entries (both new flat format and old nested format).
                 // Match on exact filenames to avoid removing unrelated user hooks
                 // that happen to contain "clyde" or "clawd" as a substring.
                 const OUR_FILES: &[&str] = &[
-                    HOOK_SCRIPT_NAME, AUTO_START_NAME, SERVER_CONFIG_NAME,
-                    COPILOT_HOOK_NAME, "clawd-hook.js",
+                    HOOK_SCRIPT_NAME,
+                    AUTO_START_NAME,
+                    SERVER_CONFIG_NAME,
+                    COPILOT_HOOK_NAME,
+                    "clawd-hook.js",
                 ];
                 let is_our_cmd = |cmd: &str| -> bool {
                     OUR_FILES.iter().any(|name| {
@@ -101,12 +111,16 @@ impl HookInstaller {
                 };
                 list.retain(|v| {
                     if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
-                        if is_our_cmd(cmd) { return false; }
+                        if is_our_cmd(cmd) {
+                            return false;
+                        }
                     }
                     if let Some(hooks_arr) = v.get("hooks").and_then(|h| h.as_array()) {
                         for hook in hooks_arr {
                             if let Some(cmd) = hook.get("command").and_then(|c| c.as_str()) {
-                                if is_our_cmd(cmd) { return false; }
+                                if is_our_cmd(cmd) {
+                                    return false;
+                                }
                             }
                         }
                     }
@@ -136,7 +150,8 @@ impl HookInstaller {
         // Response format: { hookSpecificOutput: { hookEventName, decision: { behavior } } }
         if let Some(port) = self.server_port {
             let perm_url = format!("http://127.0.0.1:{port}/permission");
-            let arr = hooks.entry("PermissionRequest")
+            let arr = hooks
+                .entry("PermissionRequest")
                 .or_insert_with(|| serde_json::json!([]));
             if let Some(list) = arr.as_array_mut() {
                 // Remove any old Clyde permission hook entries
@@ -145,13 +160,17 @@ impl HookInstaller {
                     if let Some(inner) = v.get("hooks").and_then(|h| h.as_array()) {
                         for hook in inner {
                             if let Some(url) = hook.get("url").and_then(|u| u.as_str()) {
-                                if url.contains("/permission") { return false; }
+                                if url.contains("/permission") {
+                                    return false;
+                                }
                             }
                         }
                     }
                     // Also check flat format in case of old registration
                     if let Some(url) = v.get("url").and_then(|u| u.as_str()) {
-                        if url.contains("/permission") { return false; }
+                        if url.contains("/permission") {
+                            return false;
+                        }
                     }
                     true
                 });
@@ -171,7 +190,9 @@ impl HookInstaller {
             if let Some(arr) = hooks.get_mut(event).and_then(|v| v.as_array_mut()) {
                 arr.retain(|v| {
                     if let Some(url) = v.get("url").and_then(|u| u.as_str()) {
-                        if url.contains("/permission") { return false; }
+                        if url.contains("/permission") {
+                            return false;
+                        }
                     }
                     true
                 });
@@ -180,8 +201,7 @@ impl HookInstaller {
 
         // Step 4: Deploy Copilot hook script (user still needs to configure ~/.copilot/hooks/hooks.json)
         let copilot_path = hook_dir.join(COPILOT_HOOK_NAME);
-        std::fs::write(&copilot_path, COPILOT_HOOK_CONTENT)
-            .context("writing copilot-hook.js")?;
+        std::fs::write(&copilot_path, COPILOT_HOOK_CONTENT).context("writing copilot-hook.js")?;
 
         // Step 4: Auto-configure Copilot hooks.json if ~/.copilot exists
         if let Ok(home) = dirs::home_dir().context("home dir") {
@@ -203,7 +223,10 @@ impl HookInstaller {
                     true
                 };
                 if should_write {
-                    let _ = std::fs::write(&hooks_json, serde_json::to_string_pretty(&config).unwrap_or_default());
+                    let _ = std::fs::write(
+                        &hooks_json,
+                        serde_json::to_string_pretty(&config).unwrap_or_default(),
+                    );
                 }
             }
         }
@@ -231,20 +254,26 @@ fn hook_dir() -> Result<PathBuf> {
 
 /// Check if the PermissionRequest hook in settings.json is correctly formatted.
 pub fn permission_hook_is_healthy(settings: &serde_json::Value, expected_url: &str) -> bool {
-    let perm_arr = match settings.get("hooks")
+    let perm_arr = match settings
+        .get("hooks")
         .and_then(|h| h.get("PermissionRequest"))
-        .and_then(|p| p.as_array()) {
+        .and_then(|p| p.as_array())
+    {
         Some(arr) => arr,
         None => return false,
     };
     for entry in perm_arr {
         // Must be nested format with matcher + hooks array
-        if entry.get("matcher").is_none() { continue; }
+        if entry.get("matcher").is_none() {
+            continue;
+        }
         if let Some(inner) = entry.get("hooks").and_then(|h| h.as_array()) {
             for hook in inner {
                 if hook.get("type").and_then(|t| t.as_str()) == Some("http") {
                     if let Some(url) = hook.get("url").and_then(|u| u.as_str()) {
-                        if url == expected_url { return true; }
+                        if url == expected_url {
+                            return true;
+                        }
                     }
                 }
             }
@@ -274,24 +303,48 @@ mod tests {
         // SessionStart has 1 nested entry containing auto-start + main hook
         assert_eq!(arr.len(), 1, "SessionStart should have one nested entry");
         let entry = &arr[0];
-        assert_eq!(entry["matcher"].as_str().unwrap(), "", "must have empty matcher");
+        assert_eq!(
+            entry["matcher"].as_str().unwrap(),
+            "",
+            "must have empty matcher"
+        );
         let inner = entry["hooks"].as_array().unwrap();
-        assert_eq!(inner.len(), 2, "inner hooks should have auto-start + main hook");
+        assert_eq!(
+            inner.len(),
+            2,
+            "inner hooks should have auto-start + main hook"
+        );
         let auto_cmd = inner[0]["command"].as_str().unwrap();
-        assert!(auto_cmd.contains(AUTO_START_NAME), "first hook should be auto-start");
+        assert!(
+            auto_cmd.contains(AUTO_START_NAME),
+            "first hook should be auto-start"
+        );
         let main_cmd = inner[1]["command"].as_str().unwrap();
-        assert!(main_cmd.contains(HOOK_SCRIPT_NAME), "second hook should be main hook");
-        assert!(main_cmd.contains("SessionStart"), "hook command should include event name");
+        assert!(
+            main_cmd.contains(HOOK_SCRIPT_NAME),
+            "second hook should be main hook"
+        );
+        assert!(
+            main_cmd.contains("SessionStart"),
+            "hook command should include event name"
+        );
 
         // PermissionRequest should have a nested HTTP hook entry with matcher
         let perm_arr = parsed["hooks"]["PermissionRequest"].as_array().unwrap();
         assert_eq!(perm_arr.len(), 1, "PermissionRequest should have one entry");
         let perm_entry = &perm_arr[0];
-        assert_eq!(perm_entry["matcher"].as_str().unwrap(), "", "matcher should be empty (match all tools)");
+        assert_eq!(
+            perm_entry["matcher"].as_str().unwrap(),
+            "",
+            "matcher should be empty (match all tools)"
+        );
         let inner_hooks = perm_entry["hooks"].as_array().unwrap();
         assert_eq!(inner_hooks.len(), 1);
         assert_eq!(inner_hooks[0]["type"].as_str().unwrap(), "http");
-        assert!(inner_hooks[0]["url"].as_str().unwrap().contains("/permission"));
+        assert!(inner_hooks[0]["url"]
+            .as_str()
+            .unwrap()
+            .contains("/permission"));
 
         let _ = std::fs::remove_file(&tmp_file);
     }
@@ -307,12 +360,18 @@ mod tests {
         };
 
         installer.register().expect("first register should succeed");
-        installer.register().expect("second register should succeed");
+        installer
+            .register()
+            .expect("second register should succeed");
 
         let contents = std::fs::read_to_string(&tmp_file).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         let arr = parsed["hooks"]["SessionStart"].as_array().unwrap();
-        assert_eq!(arr.len(), 1, "should not register hook twice (one nested entry)");
+        assert_eq!(
+            arr.len(),
+            1,
+            "should not register hook twice (one nested entry)"
+        );
 
         // PermissionRequest should not duplicate
         let perm_arr = parsed["hooks"]["PermissionRequest"].as_array().unwrap();
@@ -332,7 +391,11 @@ mod tests {
                 ]
             }
         });
-        std::fs::write(&tmp_file, serde_json::to_string_pretty(&old_settings).unwrap()).unwrap();
+        std::fs::write(
+            &tmp_file,
+            serde_json::to_string_pretty(&old_settings).unwrap(),
+        )
+        .unwrap();
 
         let installer = HookInstaller {
             settings_path: Some(tmp_file.clone()),
@@ -343,18 +406,36 @@ mod tests {
         let contents = std::fs::read_to_string(&tmp_file).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         let perm_arr = parsed["hooks"]["PermissionRequest"].as_array().unwrap();
-        assert_eq!(perm_arr.len(), 1, "should have exactly one PermissionRequest entry");
+        assert_eq!(
+            perm_arr.len(),
+            1,
+            "should have exactly one PermissionRequest entry"
+        );
 
         let entry = &perm_arr[0];
         // Must be nested format with matcher + hooks array
-        assert!(entry.get("matcher").is_some(), "entry must have matcher field");
-        let inner = entry["hooks"].as_array().expect("entry must have hooks array");
+        assert!(
+            entry.get("matcher").is_some(),
+            "entry must have matcher field"
+        );
+        let inner = entry["hooks"]
+            .as_array()
+            .expect("entry must have hooks array");
         assert_eq!(inner.len(), 1);
-        assert_eq!(inner[0]["url"].as_str().unwrap(), "http://127.0.0.1:23334/permission");
+        assert_eq!(
+            inner[0]["url"].as_str().unwrap(),
+            "http://127.0.0.1:23334/permission"
+        );
 
         // Old flat url field should NOT exist at top level
-        assert!(entry.get("url").is_none(), "flat url field must not exist at top level");
-        assert!(entry.get("type").is_none(), "flat type field must not exist at top level");
+        assert!(
+            entry.get("url").is_none(),
+            "flat url field must not exist at top level"
+        );
+        assert!(
+            entry.get("type").is_none(),
+            "flat type field must not exist at top level"
+        );
 
         let _ = std::fs::remove_file(&tmp_file);
     }
@@ -369,7 +450,10 @@ mod tests {
                 }]
             }
         });
-        assert!(permission_hook_is_healthy(&settings, "http://127.0.0.1:23333/permission"));
+        assert!(permission_hook_is_healthy(
+            &settings,
+            "http://127.0.0.1:23333/permission"
+        ));
     }
 
     #[test]
@@ -381,7 +465,10 @@ mod tests {
                 }]
             }
         });
-        assert!(!permission_hook_is_healthy(&settings, "http://127.0.0.1:23333/permission"));
+        assert!(!permission_hook_is_healthy(
+            &settings,
+            "http://127.0.0.1:23333/permission"
+        ));
     }
 
     #[test]
@@ -394,12 +481,18 @@ mod tests {
                 }]
             }
         });
-        assert!(!permission_hook_is_healthy(&settings, "http://127.0.0.1:23333/permission"));
+        assert!(!permission_hook_is_healthy(
+            &settings,
+            "http://127.0.0.1:23333/permission"
+        ));
     }
 
     #[test]
     fn test_permission_hook_unhealthy_missing() {
         let settings = serde_json::json!({ "hooks": {} });
-        assert!(!permission_hook_is_healthy(&settings, "http://127.0.0.1:23333/permission"));
+        assert!(!permission_hook_is_healthy(
+            &settings,
+            "http://127.0.0.1:23333/permission"
+        ));
     }
 }

@@ -7,12 +7,12 @@
 //! Falls back gracefully: if command hooks are also firing, the state machine's
 //! priority resolution ensures the highest-priority state wins.
 
+use crate::state_machine::SharedState;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
-use crate::state_machine::SharedState;
 
 const POLL_INTERVAL_MS: u64 = 2000;
 
@@ -27,7 +27,9 @@ pub fn start_claude_monitor(app: AppHandle, state: SharedState) {
 
         loop {
             interval.tick().await;
-            if !claude_dir.exists() { continue; }
+            if !claude_dir.exists() {
+                continue;
+            }
 
             // Scan for .jsonl files (session logs)
             let jsonl_files = find_jsonl_files(&claude_dir);
@@ -42,7 +44,9 @@ pub fn start_claude_monitor(app: AppHandle, state: SharedState) {
                     Ok(m) => m.len(),
                     Err(_) => continue,
                 };
-                if file_len <= offset { continue; }
+                if file_len <= offset {
+                    continue;
+                }
 
                 // First time seeing this file: skip to end (only process new lines)
                 if offset == 0 && file_len > 0 {
@@ -51,7 +55,9 @@ pub fn start_claude_monitor(app: AppHandle, state: SharedState) {
                 }
 
                 let mut reader = BufReader::new(file);
-                if reader.seek(SeekFrom::Start(offset)).is_err() { continue; }
+                if reader.seek(SeekFrom::Start(offset)).is_err() {
+                    continue;
+                }
 
                 let mut last_state: Option<&'static str> = None;
                 let mut session_id = extract_session_id(&path);
@@ -61,11 +67,13 @@ pub fn start_claude_monitor(app: AppHandle, state: SharedState) {
                     line.clear();
                     match reader.read_line(&mut line) {
                         Ok(0) => break,
-                        Ok(_) => {},
+                        Ok(_) => {}
                         Err(_) => break,
                     }
                     let trimmed = line.trim();
-                    if trimmed.is_empty() { continue; }
+                    if trimmed.is_empty() {
+                        continue;
+                    }
 
                     if let Ok(entry) = serde_json::from_str::<serde_json::Value>(trimmed) {
                         // Extract session_id from the entry if available
@@ -75,13 +83,22 @@ pub fn start_claude_monitor(app: AppHandle, state: SharedState) {
 
                         // Extract permissionMode from transcript entries
                         if let Some(mode) = entry.get("permissionMode").and_then(|m| m.as_str()) {
-                            if let Some(tracker) = app.try_state::<crate::permission_mode::ModeTracker>() {
-                                let lang = app.try_state::<crate::prefs::SharedPrefs>()
-                                    .map(|p: tauri::State<crate::prefs::SharedPrefs>| p.lock().unwrap_or_else(|e| e.into_inner()).lang.clone())
+                            if let Some(tracker) =
+                                app.try_state::<crate::permission_mode::ModeTracker>()
+                            {
+                                let lang = app
+                                    .try_state::<crate::prefs::SharedPrefs>()
+                                    .map(|p: tauri::State<crate::prefs::SharedPrefs>| {
+                                        p.lock().unwrap_or_else(|e| e.into_inner()).lang.clone()
+                                    })
                                     .unwrap_or_else(|| "en".into());
                                 crate::permission_mode::update_session_mode(
-                                    &app, &tracker, &session_id, mode,
-                                    crate::permission_mode::ModeSource::Transcript, &lang,
+                                    &app,
+                                    &tracker,
+                                    &session_id,
+                                    mode,
+                                    crate::permission_mode::ModeSource::Transcript,
+                                    &lang,
                                 );
                             }
                         }
@@ -107,9 +124,12 @@ pub fn start_claude_monitor(app: AppHandle, state: SharedState) {
                         sm.current_svg = svg.clone();
                         (resolved, svg)
                     };
-                    let _ = app.emit("state-change", serde_json::json!({
-                        "state": resolved, "svg": svg
-                    }));
+                    let _ = app.emit(
+                        "state-change",
+                        serde_json::json!({
+                            "state": resolved, "svg": svg
+                        }),
+                    );
                 }
             }
         }
@@ -142,7 +162,8 @@ fn find_jsonl_files(base: &PathBuf) -> Vec<PathBuf> {
 
 /// Extract a session identifier from the file path.
 fn extract_session_id(path: &PathBuf) -> String {
-    let stem = path.file_stem()
+    let stem = path
+        .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("claude");
     format!("claude-monitor-{}", &stem[..stem.len().min(12)])

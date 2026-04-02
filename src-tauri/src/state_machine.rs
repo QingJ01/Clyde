@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::time::Instant;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 pub type SharedState = Arc<Mutex<StateMachine>>;
 
@@ -35,17 +35,17 @@ impl SessionEntry {
 /// When adding a new state, update ALL locations above.
 pub fn state_priority(s: &str) -> u8 {
     match s {
-        "error"        => 8,
+        "error" => 8,
         "notification" => 7,
-        "sweeping"     => 6,
-        "attention"    => 5,
-        "carrying"     => 4,
-        "juggling"     => 4,
-        "working"      => 3,
-        "thinking"     => 2,
-        "idle"         => 1,
-        "sleeping"     => 0,
-        _              => 0,
+        "sweeping" => 6,
+        "attention" => 5,
+        "carrying" => 4,
+        "juggling" => 4,
+        "working" => 3,
+        "thinking" => 2,
+        "idle" => 1,
+        "sleeping" => 0,
+        _ => 0,
     }
 }
 
@@ -55,23 +55,48 @@ const WORKING_STALE_SECS: u64 = 300;
 
 pub struct StateMachine {
     pub current_state: String,
-    pub current_svg:   String,
-    pub sessions:      HashMap<String, SessionEntry>,
-    pub dnd:           bool,
+    pub current_svg: String,
+    pub sessions: HashMap<String, SessionEntry>,
+    pub manual_dnd: bool,
+    pub auto_dnd: bool,
+    pub dnd: bool,
+    pub auto_hidden: bool,
 }
 
 impl StateMachine {
     pub fn new() -> Self {
         StateMachine {
             current_state: "idle".into(),
-            current_svg:   "clyde-idle-follow.svg".into(),
-            sessions:      HashMap::new(),
-            dnd:           false,
+            current_svg: "clyde-idle-follow.svg".into(),
+            sessions: HashMap::new(),
+            manual_dnd: false,
+            auto_dnd: false,
+            dnd: false,
+            auto_hidden: false,
         }
     }
 
+    fn recompute_dnd(&mut self) -> bool {
+        let next = self.manual_dnd || self.auto_dnd;
+        let changed = self.dnd != next;
+        self.dnd = next;
+        changed
+    }
+
+    pub fn toggle_manual_dnd(&mut self) -> bool {
+        self.manual_dnd = !self.manual_dnd;
+        self.recompute_dnd()
+    }
+
+    pub fn set_auto_dnd(&mut self, enabled: bool) -> bool {
+        self.auto_dnd = enabled;
+        self.recompute_dnd()
+    }
+
     pub fn resolve_display_state(&self) -> String {
-        if self.sessions.is_empty() { return "idle".into(); }
+        if self.sessions.is_empty() {
+            return "idle".into();
+        }
         let mut best = "sleeping";
         for s in self.sessions.values() {
             if state_priority(&s.state) > state_priority(best) {
@@ -99,15 +124,20 @@ impl StateMachine {
             }
             return;
         }
-        let entry = self.sessions.entry(session_id.to_string())
+        let entry = self
+            .sessions
+            .entry(session_id.to_string())
             .or_insert_with(|| SessionEntry::new(state));
         // Protect juggling: don't downgrade to working unless SubagentStop
-        if entry.state == "juggling" && state == "working"
-            && event != "SubagentStop" && event != "subagentStop" {
+        if entry.state == "juggling"
+            && state == "working"
+            && event != "SubagentStop"
+            && event != "subagentStop"
+        {
             entry.updated_at = Instant::now();
             return;
         }
-        entry.state      = state.to_string();
+        entry.state = state.to_string();
         entry.updated_at = Instant::now();
     }
 
@@ -144,46 +174,63 @@ impl StateMachine {
 
     /// Session summaries for context menu display.
     pub fn session_summaries(&self) -> Vec<(String, String, Option<u32>, String)> {
-        self.sessions.iter().map(|(id, e)| {
-            (id.clone(), e.state.clone(), e.source_pid, e.agent_id.clone())
-        }).collect()
+        self.sessions
+            .iter()
+            .map(|(id, e)| {
+                (
+                    id.clone(),
+                    e.state.clone(),
+                    e.source_pid,
+                    e.agent_id.clone(),
+                )
+            })
+            .collect()
     }
 
     pub fn svg_for_state(&self, state: &str) -> String {
-        let working_count = self.sessions.values()
+        let working_count = self
+            .sessions
+            .values()
             .filter(|s| matches!(s.state.as_str(), "working" | "thinking" | "juggling"))
             .count();
         match state {
-            "idle"         => "clyde-idle-follow.svg".into(),
-            "working"      => match working_count {
+            "idle" => "clyde-idle-follow.svg".into(),
+            "working" => match working_count {
                 n if n >= 3 => "clyde-working-building.svg".into(),
                 n if n >= 2 => "clyde-working-juggling.svg".into(),
-                _           => "clyde-working-typing.svg".into(),
+                _ => "clyde-working-typing.svg".into(),
             },
-            "juggling"     => {
-                let n = self.sessions.values().filter(|s| s.state == "juggling").count();
-                if n >= 2 { "clyde-working-conducting.svg".into() }
-                else { "clyde-working-juggling.svg".into() }
-            },
-            "thinking"     => "clyde-working-thinking.svg".into(),
-            "sweeping"     => "clyde-working-sweeping.svg".into(),
-            "error"        => "clyde-error.svg".into(),
-            "attention"    => "clyde-happy.svg".into(),
+            "juggling" => {
+                let n = self
+                    .sessions
+                    .values()
+                    .filter(|s| s.state == "juggling")
+                    .count();
+                if n >= 2 {
+                    "clyde-working-conducting.svg".into()
+                } else {
+                    "clyde-working-juggling.svg".into()
+                }
+            }
+            "thinking" => "clyde-working-thinking.svg".into(),
+            "sweeping" => "clyde-working-sweeping.svg".into(),
+            "error" => "clyde-error.svg".into(),
+            "attention" => "clyde-happy.svg".into(),
             "notification" => "clyde-notification.svg".into(),
-            "carrying"     => "clyde-working-carrying.svg".into(),
-            "sleeping"     => "clyde-sleeping.svg".into(),
-            "yawning"      => "clyde-idle-yawn.svg".into(),
-            "dozing"       => "clyde-idle-doze.svg".into(),
-            "collapsing"   => "clyde-collapse-sleep.svg".into(),
-            "waking"       => "clyde-wake.svg".into(),
+            "carrying" => "clyde-working-carrying.svg".into(),
+            "sleeping" => "clyde-sleeping.svg".into(),
+            "yawning" => "clyde-idle-yawn.svg".into(),
+            "dozing" => "clyde-idle-doze.svg".into(),
+            "collapsing" => "clyde-collapse-sleep.svg".into(),
+            "waking" => "clyde-wake.svg".into(),
             // Mini mode states
-            "mini-idle"    => "clyde-mini-idle.svg".into(),
-            "mini-alert"   => "clyde-mini-alert.svg".into(),
-            "mini-happy"   => "clyde-mini-happy.svg".into(),
-            "mini-peek"    => "clyde-mini-peek.svg".into(),
-            "mini-enter"   => "clyde-mini-enter.svg".into(),
-            "mini-sleep"   => "clyde-mini-sleep.svg".into(),
-            _              => "clyde-idle-follow.svg".into(),
+            "mini-idle" => "clyde-mini-idle.svg".into(),
+            "mini-alert" => "clyde-mini-alert.svg".into(),
+            "mini-happy" => "clyde-mini-happy.svg".into(),
+            "mini-peek" => "clyde-mini-peek.svg".into(),
+            "mini-enter" => "clyde-mini-enter.svg".into(),
+            "mini-sleep" => "clyde-mini-sleep.svg".into(),
+            _ => "clyde-idle-follow.svg".into(),
         }
     }
 }
@@ -201,7 +248,8 @@ mod tests {
     #[test]
     fn test_higher_priority_wins() {
         let mut sm = StateMachine::new();
-        sm.sessions.insert("a".into(), SessionEntry::new("thinking"));
+        sm.sessions
+            .insert("a".into(), SessionEntry::new("thinking"));
         sm.sessions.insert("b".into(), SessionEntry::new("error"));
         assert_eq!(sm.resolve_display_state(), "error");
     }
@@ -209,7 +257,8 @@ mod tests {
     #[test]
     fn test_session_end_removes_entry() {
         let mut sm = StateMachine::new();
-        sm.sessions.insert("s1".into(), SessionEntry::new("working"));
+        sm.sessions
+            .insert("s1".into(), SessionEntry::new("working"));
         sm.handle_session_end("s1");
         assert_eq!(sm.sessions.len(), 0);
     }
@@ -217,28 +266,40 @@ mod tests {
     #[test]
     fn test_attention_resets_session_to_idle() {
         let mut sm = StateMachine::new();
-        sm.sessions.insert("s1".into(), SessionEntry::new("working"));
+        sm.sessions
+            .insert("s1".into(), SessionEntry::new("working"));
         sm.update_session_state("s1", "attention", "Stop");
         let s = sm.sessions.get("s1").unwrap();
-        assert_eq!(s.state, "idle", "attention (Stop) should reset session state to idle");
+        assert_eq!(
+            s.state, "idle",
+            "attention (Stop) should reset session state to idle"
+        );
     }
 
     #[test]
     fn test_notification_preserves_session_state() {
         let mut sm = StateMachine::new();
-        sm.sessions.insert("s1".into(), SessionEntry::new("working"));
+        sm.sessions
+            .insert("s1".into(), SessionEntry::new("working"));
         sm.update_session_state("s1", "notification", "Notification");
         let s = sm.sessions.get("s1").unwrap();
-        assert_eq!(s.state, "working", "notification should not change session state");
+        assert_eq!(
+            s.state, "working",
+            "notification should not change session state"
+        );
     }
 
     #[test]
     fn test_error_preserves_session_state() {
         let mut sm = StateMachine::new();
-        sm.sessions.insert("s1".into(), SessionEntry::new("working"));
+        sm.sessions
+            .insert("s1".into(), SessionEntry::new("working"));
         sm.update_session_state("s1", "error", "PostToolUseFailure");
         let s = sm.sessions.get("s1").unwrap();
-        assert_eq!(s.state, "working", "error is oneshot — session stays working");
+        assert_eq!(
+            s.state, "working",
+            "error is oneshot — session stays working"
+        );
     }
 
     #[test]
@@ -253,18 +314,22 @@ mod tests {
     #[test]
     fn test_juggling_not_downgraded_by_working() {
         let mut sm = StateMachine::new();
-        sm.sessions.insert("s1".into(), SessionEntry::new("juggling"));
+        sm.sessions
+            .insert("s1".into(), SessionEntry::new("juggling"));
         sm.update_session_state("s1", "working", "PreToolUse"); // not SubagentStop
         let s = sm.sessions.get("s1").unwrap();
-        assert_eq!(s.state, "juggling", "juggling should not be downgraded to working");
+        assert_eq!(
+            s.state, "juggling",
+            "juggling should not be downgraded to working"
+        );
     }
 
     #[test]
     fn test_svg_for_working_states() {
         let sm = StateMachine::new();
-        assert_eq!(sm.svg_for_state("idle"),     "clyde-idle-follow.svg");
+        assert_eq!(sm.svg_for_state("idle"), "clyde-idle-follow.svg");
         assert_eq!(sm.svg_for_state("thinking"), "clyde-working-thinking.svg");
-        assert_eq!(sm.svg_for_state("error"),    "clyde-error.svg");
+        assert_eq!(sm.svg_for_state("error"), "clyde-error.svg");
         assert_eq!(sm.svg_for_state("sleeping"), "clyde-sleeping.svg");
     }
 }

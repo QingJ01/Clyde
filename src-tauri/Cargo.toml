@@ -36,6 +36,10 @@ windows = { version = "0.58", features = [
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10.1"
+core-graphics = "0.25.0"
+
 [dev-dependencies]
 tempfile = "3"
 

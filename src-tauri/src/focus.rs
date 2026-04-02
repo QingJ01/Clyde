@@ -20,7 +20,10 @@ pub fn focus_window_by_pid(pid: u32, _cwd: &str) {
                 target_pid: u32,
                 found_hwnd: isize,
             }
-            let mut search = SearchData { target_pid: pid, found_hwnd: 0 };
+            let mut search = SearchData {
+                target_pid: pid,
+                found_hwnd: 0,
+            };
 
             unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
                 let search = &mut *(lparam.0 as *mut SearchData);

@@ -1,26 +1,28 @@
-mod windows;
-mod tick;
-mod state_machine;
-mod http_server;
-mod hooks;
-mod i18n;
-mod prefs;
-mod tray;
-mod mini;
-mod codex_monitor;
 mod claude_monitor;
+mod codex_monitor;
+mod environment;
+mod focus;
+mod hooks;
+mod http_server;
+mod i18n;
+mod mini;
 mod permission;
 mod permission_mode;
-mod focus;
+mod prefs;
+mod state_machine;
+mod tick;
+mod tray;
 mod util;
+mod windows;
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
-use tauri::window::Color;
-use state_machine::{SharedState, StateMachine};
 use http_server::PendingPerms;
 use prefs::SharedPrefs;
+use serde::Serialize;
+use state_machine::{SharedState, StateMachine};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tauri::window::Color;
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 use util::MutexExt;
 
 // Animation duration constants (milliseconds)
@@ -33,11 +35,45 @@ const MINI_IDLE_DELAY_MS: u64 = 500;
 /// Any new sleep/wake/mini transition should cancel the previous one.
 pub type SleepAbortHandle = Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>;
 
+#[derive(Clone, Serialize)]
+struct PetConfig {
+    opacity: f32,
+}
+
+#[derive(Clone, Serialize)]
+struct InteractionState {
+    position_locked: bool,
+    click_through: bool,
+}
+
+#[derive(Serialize)]
+struct MenuSession {
+    id: String,
+    state: String,
+    agent: String,
+    pid: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct MenuData {
+    sessions: Vec<MenuSession>,
+    is_dnd: bool,
+    is_mini: bool,
+    lang: String,
+    size: String,
+    opacity: u8,
+    position_locked: bool,
+    click_through: bool,
+    auto_hide_fullscreen: bool,
+    auto_dnd_meetings: bool,
+    auto_start_with_claude: bool,
+}
+
 struct DragState {
-    active:        bool,
-    dragging:      bool,   // true once drag threshold is exceeded
-    start_win_x:   i32,
-    start_win_y:   i32,
+    active: bool,
+    dragging: bool, // true once drag threshold is exceeded
+    start_win_x: i32,
+    start_win_y: i32,
     start_mouse_x: f64,
     start_mouse_y: f64,
 }
@@ -46,13 +82,174 @@ type SharedDrag = Arc<Mutex<DragState>>;
 /// Minimum mouse distance (physical pixels) before a drag actually starts.
 const DRAG_THRESHOLD: f64 = 3.0;
 
+fn emit_snap_preview(app: &AppHandle, side: Option<mini::SnapSide>) {
+    let side = side.map(|side| match side {
+        mini::SnapSide::Left => "left",
+        mini::SnapSide::Right => "right",
+    });
+    let _ = app.emit(
+        "snap-preview",
+        serde_json::json!({
+            "active": side.is_some(),
+            "side": side,
+        }),
+    );
+}
+
+fn emit_pet_config(app: &AppHandle, prefs: &prefs::Prefs) {
+    let _ = app.emit(
+        "pet-config-changed",
+        PetConfig {
+            opacity: prefs.opacity,
+        },
+    );
+}
+
+fn emit_interaction_state(app: &AppHandle, prefs: &prefs::Prefs) {
+    let _ = app.emit(
+        "interaction-state-changed",
+        InteractionState {
+            position_locked: prefs.lock_position,
+            click_through: prefs.click_through,
+        },
+    );
+}
+
+fn apply_click_through(app: &AppHandle, enabled: bool) {
+    let Some(hit) = app.get_webview_window("hit") else {
+        return;
+    };
+    let _ = hit.set_ignore_cursor_events(enabled);
+    if enabled {
+        windows::hide_hit_window(app);
+    } else {
+        let is_auto_hidden = app
+            .try_state::<SharedState>()
+            .map(|state| state.lock_or_recover().auto_hidden)
+            .unwrap_or(false);
+        if is_auto_hidden {
+            return;
+        }
+        if let Some(bounds) = windows::get_pet_bounds(app) {
+            windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
+        }
+        windows::show_hit_window(app);
+    }
+}
+
+fn persist_current_pet_position(app: &AppHandle) {
+    let Some(bounds) = windows::get_pet_bounds(app) else {
+        return;
+    };
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return;
+    };
+    let mut prefs = prefs_state.lock_or_recover();
+    if prefs.mini_mode {
+        return;
+    }
+    prefs.x = bounds.x;
+    prefs.y = bounds.y;
+    if let Some(monitor) = windows::monitor_for_bounds(app, &bounds) {
+        let placement = prefs.monitor_positions.entry(monitor.key).or_default();
+        placement.x = bounds.x;
+        placement.y = bounds.y;
+    }
+    prefs::save(app, &prefs);
+}
+
+pub(crate) fn set_opacity(app: &AppHandle, opacity: f32) {
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return;
+    };
+    let mut prefs = prefs_state.lock_or_recover();
+    prefs.opacity = prefs::normalize_opacity(opacity);
+    prefs::save(app, &prefs);
+    emit_pet_config(app, &prefs);
+}
+
+pub(crate) fn toggle_position_lock_pref(app: &AppHandle) {
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return;
+    };
+    let mut prefs = prefs_state.lock_or_recover();
+    prefs.lock_position = !prefs.lock_position;
+    prefs::save(app, &prefs);
+    emit_interaction_state(app, &prefs);
+}
+
+pub(crate) fn toggle_click_through_pref(app: &AppHandle) {
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return;
+    };
+    let mut prefs = prefs_state.lock_or_recover();
+    prefs.click_through = !prefs.click_through;
+    let click_through = prefs.click_through;
+    prefs::save(app, &prefs);
+    emit_interaction_state(app, &prefs);
+    drop(prefs);
+    apply_click_through(app, click_through);
+}
+
+pub(crate) fn toggle_autostart_pref(app: &AppHandle) {
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return;
+    };
+    let mut prefs = prefs_state.lock_or_recover();
+    prefs.auto_start_with_claude = !prefs.auto_start_with_claude;
+    prefs::save(app, &prefs);
+}
+
+pub(crate) fn toggle_auto_hide_fullscreen_pref(app: &AppHandle) {
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return;
+    };
+    let mut prefs = prefs_state.lock_or_recover();
+    prefs.auto_hide_fullscreen = !prefs.auto_hide_fullscreen;
+    prefs::save(app, &prefs);
+}
+
+pub(crate) fn toggle_auto_dnd_meetings_pref(app: &AppHandle) {
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return;
+    };
+    let mut prefs = prefs_state.lock_or_recover();
+    prefs.auto_dnd_meetings = !prefs.auto_dnd_meetings;
+    prefs::save(app, &prefs);
+}
+
+pub(crate) fn restore_interaction(app: &AppHandle) {
+    let Some(prefs_state) = app.try_state::<SharedPrefs>() else {
+        return;
+    };
+
+    {
+        let mut prefs = prefs_state.lock_or_recover();
+        prefs.lock_position = false;
+        prefs.click_through = false;
+        prefs.auto_hide_fullscreen = false;
+        prefs::save(app, &prefs);
+        emit_interaction_state(app, &prefs);
+    }
+
+    if let Some(state) = app.try_state::<SharedState>() {
+        set_auto_hidden(app, &state, false);
+    } else if let Some(pet) = app.get_webview_window("pet") {
+        let _ = pet.show();
+    }
+
+    apply_click_through(app, false);
+    sync_hit(app);
+}
+
 #[tauri::command]
 fn drag_start(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
+    emit_snap_preview(&app, None);
     let mut d = drag.lock_or_recover();
     // Always set active so drag_end runs (for click detection, sync_hit, etc.).
     // If pet bounds are unavailable (rare, e.g. during animation), use last known or 0,0.
-    d.active        = true;
-    d.dragging      = false;
+    d.active = true;
+    d.dragging = false;
     d.start_mouse_x = x;
     d.start_mouse_y = y;
     if let Some(bounds) = windows::get_pet_bounds(&app) {
@@ -67,16 +264,35 @@ fn drag_start(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
 fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     let (active, dragging, base_x, base_y, smx, smy) = {
         let d = drag.lock_or_recover();
-        (d.active, d.dragging, d.start_win_x, d.start_win_y, d.start_mouse_x, d.start_mouse_y)
+        (
+            d.active,
+            d.dragging,
+            d.start_win_x,
+            d.start_win_y,
+            d.start_mouse_x,
+            d.start_mouse_y,
+        )
     };
-    if !active { return; }
+    if !active {
+        return;
+    }
+    let locked = app
+        .try_state::<SharedPrefs>()
+        .map(|prefs| prefs.lock_or_recover().lock_position)
+        .unwrap_or(false);
+    if locked {
+        emit_snap_preview(&app, None);
+        return;
+    }
 
     let dx = x - smx;
     let dy = y - smy;
 
     // Don't start moving until the mouse has moved past the drag threshold
     if !dragging {
-        if (dx * dx + dy * dy).sqrt() < DRAG_THRESHOLD { return; }
+        if (dx * dx + dy * dy).sqrt() < DRAG_THRESHOLD {
+            return;
+        }
         drag.lock_or_recover().dragging = true;
     }
 
@@ -85,28 +301,54 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
 
     // Query pet bounds once for both clamp and hit-window sync
     let bounds = windows::get_pet_bounds(&app);
-    let pet_w = bounds.as_ref().map(|b| b.width).unwrap_or(prefs::DEFAULT_PET_DIMENSION);
-    let pet_h = bounds.as_ref().map(|b| b.height).unwrap_or(prefs::DEFAULT_PET_DIMENSION);
+    let pet_w = bounds
+        .as_ref()
+        .map(|b| b.width)
+        .unwrap_or(prefs::DEFAULT_PET_DIMENSION);
+    let pet_h = bounds
+        .as_ref()
+        .map(|b| b.height)
+        .unwrap_or(prefs::DEFAULT_PET_DIMENSION);
+    let probe_bounds = windows::WindowBounds {
+        x: new_x,
+        y: new_y,
+        width: pet_w,
+        height: pet_h,
+    };
 
     // Clamp to screen bounds: keep at least 30px of the pet visible
-    if let Some(monitor) = app.primary_monitor().ok().flatten() {
-        let screen_w = monitor.size().width as i32;
-        let screen_h = monitor.size().height as i32;
+    if let Some(monitor) = windows::monitor_for_bounds(&app, &probe_bounds)
+        .or_else(|| windows::current_monitor_for_pet(&app))
+    {
         const MIN_VISIBLE: i32 = 30;
-        new_x = new_x.max(MIN_VISIBLE - pet_w as i32).min(screen_w - MIN_VISIBLE);
-        new_y = new_y.max(0).min(screen_h - MIN_VISIBLE);
+        (new_x, new_y) =
+            windows::clamp_window_to_monitor(new_x, new_y, pet_w, pet_h, &monitor, MIN_VISIBLE);
     }
 
     if let Some(pet) = app.get_webview_window("pet") {
         let _ = pet.set_position(PhysicalPosition::new(new_x, new_y));
     }
     // Construct updated bounds from the new position + known size (avoid second IPC query)
-    let updated = windows::WindowBounds { x: new_x, y: new_y, width: pet_w, height: pet_h };
+    let updated = windows::WindowBounds {
+        x: new_x,
+        y: new_y,
+        width: pet_w,
+        height: pet_h,
+    };
     windows::sync_hit_window(&app, &updated, &windows::HitBox::INTERACTIVE);
+    emit_snap_preview(
+        &app,
+        mini::edge_snap_for_bounds(&app, &updated).map(|snap| snap.side),
+    );
 }
 
 #[tauri::command]
-fn drag_end(app: AppHandle, drag: tauri::State<SharedDrag>, abort_handle: tauri::State<'_, SleepAbortHandle>) {
+fn drag_end(
+    app: AppHandle,
+    drag: tauri::State<SharedDrag>,
+    abort_handle: tauri::State<'_, SleepAbortHandle>,
+) {
+    emit_snap_preview(&app, None);
     let was_dragging = {
         let mut d = drag.lock_or_recover();
         let dragging = d.dragging;
@@ -123,6 +365,7 @@ fn drag_end(app: AppHandle, drag: tauri::State<SharedDrag>, abort_handle: tauri:
             sync_hit(&app);
         } else if mini::should_snap_to_edge(&app).is_some() {
             // Dragged but still near edge — stay in mini mode
+            mini::remember_snap_for_current_monitor(&app);
             sync_hit(&app);
         } else {
             // Dragged away from edge — exit mini mode
@@ -144,6 +387,9 @@ fn drag_end(app: AppHandle, drag: tauri::State<SharedDrag>, abort_handle: tauri:
     } else {
         // Normal click or drag end — sync hit window
         sync_hit(&app);
+        if was_dragging {
+            persist_current_pet_position(&app);
+        }
     }
 }
 
@@ -162,65 +408,208 @@ fn hit_double_click(app: AppHandle, abort_handle: tauri::State<'_, SleepAbortHan
         return;
     }
     if let Some(pet) = app.get_webview_window("pet") {
-        let _ = pet.emit("play-click-reaction", serde_json::json!({
-            "svg": "clyde-react-double.svg", "duration_ms": 800
-        }));
+        let _ = pet.emit(
+            "play-click-reaction",
+            serde_json::json!({
+                "svg": "clyde-react-double.svg", "duration_ms": 800
+            }),
+        );
     }
 }
 
 #[tauri::command]
 fn hit_flail(app: AppHandle) {
     if let Some(pet) = app.get_webview_window("pet") {
-        let _ = pet.emit("play-click-reaction", serde_json::json!({
-            "svg": "clyde-react-drag.svg", "duration_ms": 1200
-        }));
+        let _ = pet.emit(
+            "play-click-reaction",
+            serde_json::json!({
+                "svg": "clyde-react-drag.svg", "duration_ms": 1200
+            }),
+        );
     }
 }
 
 #[tauri::command]
-fn show_context_menu(app: AppHandle, state: tauri::State<'_, SharedState>, prefs: tauri::State<SharedPrefs>) {
-    use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
+fn show_context_menu(
+    app: AppHandle,
+    state: tauri::State<'_, SharedState>,
+    prefs: tauri::State<SharedPrefs>,
+) {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 
     let lang = prefs.lock_or_recover().lang.clone();
     let p = prefs.lock_or_recover();
     let is_dnd = state.lock_or_recover().dnd;
     let is_mini = p.mini_mode;
     let cur_size = p.size.clone();
+    let cur_opacity = (p.opacity * 100.0).round() as i32;
+    let is_locked = p.lock_position;
+    let click_through = p.click_through;
+    let auto_hide_fullscreen = p.auto_hide_fullscreen;
+    let auto_dnd_meetings = p.auto_dnd_meetings;
+    let autostart = p.auto_start_with_claude;
     drop(p);
 
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
 
     // Size submenu (with checkmark)
     if let (Ok(s), Ok(m), Ok(l)) = (
-        MenuItem::with_id(&app, "ctx-size-s", if cur_size == "S" { "✓ S" } else { "S" }, true, None::<&str>),
-        MenuItem::with_id(&app, "ctx-size-m", if cur_size == "M" { "✓ M" } else { "M" }, true, None::<&str>),
-        MenuItem::with_id(&app, "ctx-size-l", if cur_size == "L" { "✓ L" } else { "L" }, true, None::<&str>),
+        MenuItem::with_id(
+            &app,
+            "ctx-size-s",
+            if cur_size == "S" { "✓ S" } else { "S" },
+            true,
+            None::<&str>,
+        ),
+        MenuItem::with_id(
+            &app,
+            "ctx-size-m",
+            if cur_size == "M" { "✓ M" } else { "M" },
+            true,
+            None::<&str>,
+        ),
+        MenuItem::with_id(
+            &app,
+            "ctx-size-l",
+            if cur_size == "L" { "✓ L" } else { "L" },
+            true,
+            None::<&str>,
+        ),
     ) {
         if let Ok(sub) = Submenu::with_items(&app, i18n::t("size", &lang), true, &[&s, &m, &l]) {
             items.push(Box::new(sub));
         }
     }
 
+    let mut opacity_items = Vec::new();
+    for level in [100, 90, 80, 70, 60, 50, 40] {
+        let label = if cur_opacity == level {
+            format!("✓ {level}%")
+        } else {
+            format!("{level}%")
+        };
+        if let Ok(item) = MenuItem::with_id(
+            &app,
+            format!("ctx-opacity-{level}"),
+            label,
+            true,
+            None::<&str>,
+        ) {
+            opacity_items.push(item);
+        }
+    }
+    let opacity_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = opacity_items
+        .iter()
+        .map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
+        .collect();
+    if let Ok(sub) = Submenu::with_items(&app, i18n::t("opacity", &lang), true, &opacity_refs) {
+        items.push(Box::new(sub));
+    }
+
     // Mini mode
-    let mini_label = if is_mini { format!("✓ {}", i18n::t("mini", &lang)) } else { i18n::t("mini", &lang) };
+    let mini_label = if is_mini {
+        format!("✓ {}", i18n::t("mini", &lang))
+    } else {
+        i18n::t("mini", &lang)
+    };
     if let Ok(m) = MenuItem::with_id(&app, "ctx-mini", &mini_label, true, None::<&str>) {
         items.push(Box::new(m));
     }
 
+    if let Ok(m) = MenuItem::with_id(
+        &app,
+        "ctx-restore-interaction",
+        i18n::t("restoreInteraction", &lang),
+        true,
+        None::<&str>,
+    ) {
+        items.push(Box::new(m));
+    }
+
+    let lock_label = if is_locked {
+        format!("✓ {}", i18n::t("lockPosition", &lang))
+    } else {
+        i18n::t("lockPosition", &lang)
+    };
+    if let Ok(m) = MenuItem::with_id(&app, "ctx-lock-position", &lock_label, true, None::<&str>) {
+        items.push(Box::new(m));
+    }
+
+    let click_label = if click_through {
+        format!("✓ {}", i18n::t("clickThrough", &lang))
+    } else {
+        i18n::t("clickThrough", &lang)
+    };
+    if let Ok(m) = MenuItem::with_id(&app, "ctx-click-through", &click_label, true, None::<&str>) {
+        items.push(Box::new(m));
+    }
+
+    let fullscreen_label = if auto_hide_fullscreen {
+        format!("✓ {}", i18n::t("hideOnFullscreen", &lang))
+    } else {
+        i18n::t("hideOnFullscreen", &lang)
+    };
+    if let Ok(m) = MenuItem::with_id(
+        &app,
+        "ctx-hide-on-fullscreen",
+        &fullscreen_label,
+        true,
+        None::<&str>,
+    ) {
+        items.push(Box::new(m));
+    }
+
+    let auto_dnd_label = if auto_dnd_meetings {
+        format!("✓ {}", i18n::t("autoDndMeetings", &lang))
+    } else {
+        i18n::t("autoDndMeetings", &lang)
+    };
+    if let Ok(m) = MenuItem::with_id(
+        &app,
+        "ctx-auto-dnd-meetings",
+        &auto_dnd_label,
+        true,
+        None::<&str>,
+    ) {
+        items.push(Box::new(m));
+    }
+
     // DND
-    let dnd_label = if is_dnd { format!("✓ {}", i18n::t("dnd", &lang)) } else { i18n::t("dnd", &lang) };
+    let dnd_label = if is_dnd {
+        format!("✓ {}", i18n::t("dnd", &lang))
+    } else {
+        i18n::t("dnd", &lang)
+    };
     if let Ok(dnd) = MenuItem::with_id(&app, "ctx-dnd", &dnd_label, true, None::<&str>) {
         items.push(Box::new(dnd));
     }
 
-    if let Ok(sep) = PredefinedMenuItem::separator(&app) { items.push(Box::new(sep)); }
+    let autostart_label = if autostart {
+        format!("✓ {}", i18n::t("autoStart", &lang))
+    } else {
+        i18n::t("autoStart", &lang)
+    };
+    if let Ok(item) = MenuItem::with_id(&app, "ctx-autostart", &autostart_label, true, None::<&str>)
+    {
+        items.push(Box::new(item));
+    }
+
+    if let Ok(sep) = PredefinedMenuItem::separator(&app) {
+        items.push(Box::new(sep));
+    }
 
     // Sessions submenu
     let sessions = state.lock_or_recover().session_summaries();
     let session_label = format!("{} ({})", i18n::t("sessions", &lang), sessions.len());
     let mut session_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
     if sessions.is_empty() {
-        if let Ok(no) = MenuItem::with_id(&app, "ctx-none", i18n::t("noSessions", &lang), false, None::<&str>) {
+        if let Ok(no) = MenuItem::with_id(
+            &app,
+            "ctx-none",
+            i18n::t("noSessions", &lang),
+            false,
+            None::<&str>,
+        ) {
             session_items.push(Box::new(no));
         }
     } else {
@@ -241,22 +630,32 @@ fn show_context_menu(app: AppHandle, state: tauri::State<'_, SharedState>, prefs
                 "sleeping" => i18n::t("sessionSleeping", &lang),
                 _ => sess_state.clone(),
             };
-            let label = format!("{icon} {agent}  {state_label}  {}", i18n::t("sessionJustNow", &lang));
+            let label = format!(
+                "{icon} {agent}  {state_label}  {}",
+                i18n::t("sessionJustNow", &lang)
+            );
             let item_id = format!("ctx-session-{}", sid);
             if let Ok(item) = MenuItem::with_id(&app, &item_id, &label, true, None::<&str>) {
                 session_items.push(Box::new(item));
             }
         }
     }
-    let sess_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = session_items.iter().map(|i| i.as_ref()).collect();
+    let sess_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        session_items.iter().map(|i| i.as_ref()).collect();
     if let Ok(sub) = Submenu::with_items(&app, &session_label, true, &sess_refs) {
         items.push(Box::new(sub));
     }
 
-    if let Ok(sep) = PredefinedMenuItem::separator(&app) { items.push(Box::new(sep)); }
+    if let Ok(sep) = PredefinedMenuItem::separator(&app) {
+        items.push(Box::new(sep));
+    }
 
     // Language submenu (with checkmark)
-    let en_label = if lang == "en" { "✓ English" } else { "English" };
+    let en_label = if lang == "en" {
+        "✓ English"
+    } else {
+        "English"
+    };
     let zh_label = if lang == "zh" { "✓ 中文" } else { "中文" };
     if let (Ok(en), Ok(zh)) = (
         MenuItem::with_id(&app, "ctx-lang-en", en_label, true, None::<&str>),
@@ -268,15 +667,24 @@ fn show_context_menu(app: AppHandle, state: tauri::State<'_, SharedState>, prefs
     }
 
     // About + Quit
-    if let Ok(sep) = PredefinedMenuItem::separator(&app) { items.push(Box::new(sep)); }
-    if let Ok(about) = MenuItem::with_id(&app, "ctx-about", i18n::t("about", &lang), true, None::<&str>) {
+    if let Ok(sep) = PredefinedMenuItem::separator(&app) {
+        items.push(Box::new(sep));
+    }
+    if let Ok(about) = MenuItem::with_id(
+        &app,
+        "ctx-about",
+        i18n::t("about", &lang),
+        true,
+        None::<&str>,
+    ) {
         items.push(Box::new(about));
     }
     if let Ok(q) = MenuItem::with_id(&app, "ctx-quit", i18n::t("quit", &lang), true, None::<&str>) {
         items.push(Box::new(q));
     }
 
-    let item_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = items.iter().map(|i| i.as_ref()).collect();
+    let item_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        items.iter().map(|i| i.as_ref()).collect();
     if let Ok(menu) = Menu::with_items(&app, &item_refs) {
         if let Some(hit) = app.get_webview_window("hit") {
             let _ = hit.popup_menu(&menu);
@@ -296,14 +704,121 @@ fn mini_peek_out(app: AppHandle) {
     mini::peek_out(&app);
 }
 
+#[tauri::command]
+fn get_pet_config(prefs: tauri::State<'_, SharedPrefs>) -> PetConfig {
+    let prefs = prefs.lock_or_recover();
+    PetConfig {
+        opacity: prefs.opacity,
+    }
+}
+
+#[tauri::command]
+fn get_interaction_state(prefs: tauri::State<'_, SharedPrefs>) -> InteractionState {
+    let prefs = prefs.lock_or_recover();
+    InteractionState {
+        position_locked: prefs.lock_position,
+        click_through: prefs.click_through,
+    }
+}
+
+#[tauri::command]
+fn get_menu_data(
+    state: tauri::State<'_, SharedState>,
+    prefs: tauri::State<'_, SharedPrefs>,
+) -> MenuData {
+    let prefs = prefs.lock_or_recover();
+    let sm = state.lock_or_recover();
+    let sessions = sm
+        .session_summaries()
+        .into_iter()
+        .map(|(id, session_state, pid, agent)| MenuSession {
+            id,
+            state: session_state,
+            agent,
+            pid,
+        })
+        .collect();
+    MenuData {
+        sessions,
+        is_dnd: sm.dnd,
+        is_mini: prefs.mini_mode,
+        lang: prefs.lang.clone(),
+        size: prefs.size.clone(),
+        opacity: (prefs.opacity * 100.0).round() as u8,
+        position_locked: prefs.lock_position,
+        click_through: prefs.click_through,
+        auto_hide_fullscreen: prefs.auto_hide_fullscreen,
+        auto_dnd_meetings: prefs.auto_dnd_meetings,
+        auto_start_with_claude: prefs.auto_start_with_claude,
+    }
+}
+
+#[tauri::command]
+fn menu_action(app: AppHandle, state: tauri::State<'_, SharedState>, id: String) {
+    handle_context_menu_event(&app, &state, &id);
+}
+
 /// Shared DND toggle — used from tauri command, context menu, and tray handler.
 pub(crate) fn do_toggle_dnd(app: &AppHandle, state: &SharedState) {
     let new_dnd = {
         let mut sm = state.lock_or_recover();
-        sm.dnd = !sm.dnd;
+        sm.toggle_manual_dnd();
         sm.dnd
     };
     let _ = app.emit("dnd-change", serde_json::json!({ "enabled": new_dnd }));
+}
+
+pub(crate) fn set_auto_dnd(app: &AppHandle, state: &SharedState, enabled: bool) {
+    let changed = {
+        let mut sm = state.lock_or_recover();
+        if sm.auto_dnd == enabled {
+            false
+        } else {
+            sm.set_auto_dnd(enabled)
+        }
+    };
+    if !changed {
+        return;
+    }
+    let new_dnd = state.lock_or_recover().dnd;
+    let _ = app.emit("dnd-change", serde_json::json!({ "enabled": new_dnd }));
+    if let Some(lang) = app
+        .try_state::<SharedPrefs>()
+        .map(|prefs| prefs.lock_or_recover().lang.clone())
+    {
+        tray::rebuild_menu(app, &lang);
+    }
+}
+
+pub(crate) fn set_auto_hidden(app: &AppHandle, state: &SharedState, enabled: bool) {
+    let changed = {
+        let mut sm = state.lock_or_recover();
+        if sm.auto_hidden == enabled {
+            false
+        } else {
+            sm.auto_hidden = enabled;
+            true
+        }
+    };
+    if !changed {
+        return;
+    }
+
+    let Some(pet) = app.get_webview_window("pet") else {
+        return;
+    };
+    if enabled {
+        let _ = pet.hide();
+        windows::hide_hit_window(app);
+        return;
+    }
+
+    let _ = pet.show();
+    let click_through = app
+        .try_state::<SharedPrefs>()
+        .map(|prefs| prefs.lock_or_recover().click_through)
+        .unwrap_or(false);
+    apply_click_through(app, click_through);
 }
 
 #[tauri::command]
@@ -323,7 +838,10 @@ pub(crate) fn emit_state(app: &AppHandle, state_str: &str, svg: &str) {
         (state_str, svg)
     };
 
-    let _ = app.emit("state-change", serde_json::json!({ "state": out_state, "svg": out_svg, "flip": flip }));
+    let _ = app.emit(
+        "state-change",
+        serde_json::json!({ "state": out_state, "svg": out_svg, "flip": flip }),
+    );
 }
 
 /// Map a normal state to its mini-mode equivalent.
@@ -345,7 +863,9 @@ fn mini_svg_for_state(state: &str) -> (&'static str, &'static str) {
 /// Check if currently in left-side mini mode.
 fn is_left_mini(app: &AppHandle) -> bool {
     let is_mini = prefs::is_mini_mode(&app);
-    if !is_mini { return false; }
+    if !is_mini {
+        return false;
+    }
     mini::should_snap_to_edge(app)
         .map(|s| s.side == mini::SnapSide::Left)
         .unwrap_or(false)
@@ -400,7 +920,11 @@ fn cancel_pending_task(handle: &SleepAbortHandle) {
 }
 
 #[tauri::command]
-fn trigger_sleep_sequence(app: AppHandle, state: tauri::State<'_, SharedState>, abort_handle: tauri::State<'_, SleepAbortHandle>) {
+fn trigger_sleep_sequence(
+    app: AppHandle,
+    state: tauri::State<'_, SharedState>,
+    abort_handle: tauri::State<'_, SleepAbortHandle>,
+) {
     cancel_pending_task(&abort_handle);
 
     transition(&app, &state, "yawning", "clyde-idle-yawn.svg");
@@ -410,28 +934,41 @@ fn trigger_sleep_sequence(app: AppHandle, state: tauri::State<'_, SharedState>, 
     let handle = tauri::async_runtime::spawn(async move {
         // yawn → doze
         tokio::time::sleep(std::time::Duration::from_millis(YAWN_DURATION_MS)).await;
-        if state2.lock_or_recover().current_state != "yawning" { return; }
+        if state2.lock_or_recover().current_state != "yawning" {
+            return;
+        }
         transition(&app2, &state2, "dozing", "clyde-idle-doze.svg");
 
         // doze → collapse
         tokio::time::sleep(std::time::Duration::from_millis(DOZE_DURATION_MS)).await;
-        if state2.lock_or_recover().current_state != "dozing" { return; }
+        if state2.lock_or_recover().current_state != "dozing" {
+            return;
+        }
         transition(&app2, &state2, "collapsing", "clyde-collapse-sleep.svg");
 
         // collapse → sleeping
         tokio::time::sleep(std::time::Duration::from_millis(COLLAPSE_DURATION_MS)).await;
-        if state2.lock_or_recover().current_state != "collapsing" { return; }
+        if state2.lock_or_recover().current_state != "collapsing" {
+            return;
+        }
         transition(&app2, &state2, "sleeping", "clyde-sleeping.svg");
     });
     *abort_handle.lock_or_recover() = Some(handle);
 }
 
 #[tauri::command]
-fn trigger_wake(app: AppHandle, state: tauri::State<'_, SharedState>, abort_handle: tauri::State<'_, SleepAbortHandle>) {
+fn trigger_wake(
+    app: AppHandle,
+    state: tauri::State<'_, SharedState>,
+    abort_handle: tauri::State<'_, SleepAbortHandle>,
+) {
     cancel_pending_task(&abort_handle);
 
     let current = state.lock_or_recover().current_state.clone();
-    if !matches!(current.as_str(), "yawning" | "dozing" | "collapsing" | "sleeping") {
+    if !matches!(
+        current.as_str(),
+        "yawning" | "dozing" | "collapsing" | "sleeping"
+    ) {
         return;
     }
 
@@ -441,7 +978,9 @@ fn trigger_wake(app: AppHandle, state: tauri::State<'_, SharedState>, abort_hand
     let state2 = state.inner().clone();
     let handle = tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(WAKE_DURATION_MS)).await;
-        if state2.lock_or_recover().current_state != "waking" { return; }
+        if state2.lock_or_recover().current_state != "waking" {
+            return;
+        }
         transition(&app2, &state2, "idle", "clyde-idle-follow.svg");
     });
     *abort_handle.lock_or_recover() = Some(handle);
@@ -456,6 +995,7 @@ fn set_window_size(app: AppHandle, size: String, prefs: tauri::State<SharedPrefs
         let mut p = prefs.lock_or_recover();
         p.size = size;
         prefs::save(&app, &p);
+        tray::rebuild_menu(&app, &p.lang);
     }
 }
 
@@ -472,7 +1012,8 @@ fn set_lang(app: AppHandle, lang: String, prefs: tauri::State<SharedPrefs>) {
 
 fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
     // Session focus — support both "ctx-session-X" (tray) and "session-X" (custom menu)
-    let session_id = id.strip_prefix("ctx-session-")
+    let session_id = id
+        .strip_prefix("ctx-session-")
         .or_else(|| id.strip_prefix("session-"));
     if let Some(session_id) = session_id {
         let sm = state.lock_or_recover();
@@ -487,17 +1028,99 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
     }
     // Strip optional "ctx-" prefix for backward compat with tray menu
     let action = id.strip_prefix("ctx-").unwrap_or(id);
+    let mut refresh_tray = false;
     match action {
-        "dnd"     => do_toggle_dnd(app, state),
-        "mini"    => { if prefs::is_mini_mode(app) { mini::do_exit_mini(app); } else { mini::do_enter_mini(app); } }
-        "size-s"  => tray::apply_size_pub(app, "S"),
-        "size-m"  => tray::apply_size_pub(app, "M"),
-        "size-l"  => tray::apply_size_pub(app, "L"),
+        "dnd" => {
+            do_toggle_dnd(app, state);
+            refresh_tray = true;
+        }
+        "mini" => {
+            if prefs::is_mini_mode(app) {
+                mini::do_exit_mini(app);
+            } else {
+                mini::do_enter_mini(app);
+            }
+            refresh_tray = true;
+        }
+        "restore-interaction" => {
+            restore_interaction(app);
+            refresh_tray = true;
+        }
+        "lock-position" => {
+            toggle_position_lock_pref(app);
+            refresh_tray = true;
+        }
+        "click-through" => {
+            toggle_click_through_pref(app);
+            refresh_tray = true;
+        }
+        "hide-on-fullscreen" => {
+            toggle_auto_hide_fullscreen_pref(app);
+            refresh_tray = true;
+        }
+        "auto-dnd-meetings" => {
+            toggle_auto_dnd_meetings_pref(app);
+            refresh_tray = true;
+        }
+        "autostart" => {
+            toggle_autostart_pref(app);
+            refresh_tray = true;
+        }
+        "size-s" => {
+            tray::apply_size_pub(app, "S");
+            refresh_tray = true;
+        }
+        "size-m" => {
+            tray::apply_size_pub(app, "M");
+            refresh_tray = true;
+        }
+        "size-l" => {
+            tray::apply_size_pub(app, "L");
+            refresh_tray = true;
+        }
+        "opacity-100" => {
+            set_opacity(app, 1.0);
+            refresh_tray = true;
+        }
+        "opacity-90" => {
+            set_opacity(app, 0.9);
+            refresh_tray = true;
+        }
+        "opacity-80" => {
+            set_opacity(app, 0.8);
+            refresh_tray = true;
+        }
+        "opacity-70" => {
+            set_opacity(app, 0.7);
+            refresh_tray = true;
+        }
+        "opacity-60" => {
+            set_opacity(app, 0.6);
+            refresh_tray = true;
+        }
+        "opacity-50" => {
+            set_opacity(app, 0.5);
+            refresh_tray = true;
+        }
+        "opacity-40" => {
+            set_opacity(app, 0.4);
+            refresh_tray = true;
+        }
         "lang-en" => tray::apply_lang_pub(app, "en"),
         "lang-zh" => tray::apply_lang_pub(app, "zh"),
-        "about"   => { let _ = open::that("https://github.com/QingJ01/Clyde"); }
-        "quit"    => app.exit(0),
+        "about" => {
+            let _ = open::that("https://github.com/QingJ01/Clyde");
+        }
+        "quit" => app.exit(0),
         _ => {}
+    }
+    if refresh_tray {
+        if let Some(lang) = app
+            .try_state::<SharedPrefs>()
+            .map(|prefs| prefs.lock_or_recover().lang.clone())
+        {
+            tray::rebuild_menu(app, &lang);
+        }
     }
 }
 
@@ -516,7 +1139,11 @@ fn setup_pet_window(app: &AppHandle, prefs: &prefs::Prefs) {
     if let Err(e) = pet.show() {
         eprintln!("Clyde: pet.show() failed: {e}");
     }
-    println!("Clyde: pet window shown ({}x{}) at ({},{})", w, h, prefs.x, prefs.y);
+    emit_pet_config(app, prefs);
+    println!(
+        "Clyde: pet window shown ({}x{}) at ({},{})",
+        w, h, prefs.x, prefs.y
+    );
     #[cfg(debug_assertions)]
     pet.open_devtools();
 }
@@ -527,11 +1154,19 @@ fn setup_hit_window(app: &AppHandle) {
     }
     if let Some(bounds) = windows::get_pet_bounds(app) {
         windows::sync_hit_window(app, &bounds, &windows::HitBox::INTERACTIVE);
-        windows::show_hit_window(app);
         println!("Clyde: hit window synced to pet bounds");
     } else {
         eprintln!("Clyde: could not get pet bounds for hit window sync");
     }
+    let click_through = app
+        .try_state::<SharedPrefs>()
+        .map(|prefs| {
+            let prefs = prefs.lock_or_recover();
+            emit_interaction_state(app, &prefs);
+            prefs.click_through
+        })
+        .unwrap_or(false);
+    apply_click_through(app, click_through);
 }
 
 fn setup_tray(app: &AppHandle, prefs: &prefs::Prefs, shared_tray: &tray::SharedTray) {
@@ -566,8 +1201,12 @@ fn start_cleanup_loop(app: &AppHandle, state: SharedState) {
 
 pub fn run() {
     let drag_state: SharedDrag = Arc::new(Mutex::new(DragState {
-        active: false, dragging: false, start_win_x: 0, start_win_y: 0,
-        start_mouse_x: 0.0, start_mouse_y: 0.0,
+        active: false,
+        dragging: false,
+        start_win_x: 0,
+        start_win_y: 0,
+        start_mouse_x: 0.0,
+        start_mouse_y: 0.0,
     }));
     let shared_state: SharedState = Arc::new(Mutex::new(StateMachine::new()));
     let pending_perms: PendingPerms = Arc::new(Mutex::new(HashMap::new()));
@@ -591,6 +1230,7 @@ pub fn run() {
             drag_start, drag_move, drag_end, exit_mini_mode,
             hit_double_click, hit_flail, show_context_menu,
             toggle_dnd, mini_peek_in, mini_peek_out,
+            get_pet_config, get_interaction_state, get_menu_data, menu_action,
             http_server::resolve_permission,
             trigger_sleep_sequence,
             trigger_wake,
@@ -678,6 +1318,7 @@ pub fn run() {
             codex_monitor::start_codex_monitor(app.handle().clone(), shared_state.clone());
             claude_monitor::start_claude_monitor(app.handle().clone(), shared_state.clone());
             start_cleanup_loop(app.handle(), shared_state.clone());
+            environment::start_environment_loop(app.handle(), shared_state.clone());
 
             Ok(())
         })

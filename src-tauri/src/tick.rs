@@ -1,13 +1,13 @@
+use crate::state_machine::SharedState;
+use crate::util::MutexExt;
+use crate::windows::{compute_hit_rect, get_pet_bounds, HitBox};
+use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
-use serde::Serialize;
-use crate::util::MutexExt;
-use crate::state_machine::SharedState;
-use crate::windows::{compute_hit_rect, get_pet_bounds, HitBox};
 
 const TICK_INTERVAL_MS: u64 = 50;
-const MOUSE_SLEEP_MS:   u64 = 60_000;
+const MOUSE_SLEEP_MS: u64 = 60_000;
 
 #[derive(Debug, Clone)]
 pub struct TickState {
@@ -35,7 +35,10 @@ impl Default for TickState {
 pub type SharedTickState = Arc<Mutex<TickState>>;
 
 #[derive(Clone, Serialize)]
-struct EyeMovePayload { dx: f64, dy: f64 }
+struct EyeMovePayload {
+    dx: f64,
+    dy: f64,
+}
 
 /// Reads current_state directly from SharedState (lock hold time: one String clone).
 /// This eliminates the need for a separate 200ms sync task + extra Arc<Mutex<String>>.
@@ -65,7 +68,10 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
             }
 
             let state_str = state.lock_or_recover().current_state.clone();
-            let is_sleep_state = matches!(state_str.as_str(), "yawning" | "dozing" | "collapsing" | "sleeping");
+            let is_sleep_state = matches!(
+                state_str.as_str(),
+                "yawning" | "dozing" | "collapsing" | "sleeping"
+            );
 
             // Single lock acquisition per tick for TickState
             let (should_yawn, should_wake) = {
@@ -81,8 +87,12 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
                 let idle = ts.mouse_still_since.elapsed().as_millis() as u64;
                 let yawn = state_str == "idle" && !ts.has_triggered_yawn && idle >= MOUSE_SLEEP_MS;
                 let wake = moved && is_sleep_state && !ts.has_triggered_wake;
-                if yawn { ts.has_triggered_yawn = true; }
-                if wake { ts.has_triggered_wake = true; }
+                if yawn {
+                    ts.has_triggered_yawn = true;
+                }
+                if wake {
+                    ts.has_triggered_wake = true;
+                }
                 (yawn, wake)
             };
 
@@ -125,8 +135,8 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
             if state_str == "idle" {
                 if let Some(bounds) = get_pet_bounds(&app) {
                     let rect = compute_hit_rect(&bounds, &HitBox::DEFAULT);
-                    let center_x = (rect.left + rect.right)  / 2.0;
-                    let center_y = (rect.top  + rect.bottom) / 2.0;
+                    let center_x = (rect.left + rect.right) / 2.0;
+                    let center_y = (rect.top + rect.bottom) / 2.0;
                     let raw_dx = cx - center_x;
                     let raw_dy = cy - center_y;
                     let dist = (raw_dx * raw_dx + raw_dy * raw_dy).sqrt().max(1.0);

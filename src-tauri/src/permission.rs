@@ -1,8 +1,8 @@
-use tauri::{AppHandle, Manager, WebviewWindowBuilder, WebviewUrl};
+use crate::util::MutexExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use crate::util::MutexExt;
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 pub type BubbleMap = Arc<Mutex<HashMap<String, BubbleEntry>>>;
 
@@ -62,7 +62,13 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
 
     match window {
         Ok(_) => {
-            bubbles.lock_or_recover().insert(id, BubbleEntry { data, measured_height: 200 });
+            bubbles.lock_or_recover().insert(
+                id,
+                BubbleEntry {
+                    data,
+                    measured_height: 200,
+                },
+            );
             reposition_bubbles(app, bubbles);
             true
         }
@@ -77,7 +83,9 @@ pub fn close_bubble(app: &AppHandle, bubbles: &BubbleMap, id: &str) {
     // Atomically remove from map first — if already removed (e.g. scopeguard + user click),
     // skip the rest to avoid double-destroy race condition.
     let removed = bubbles.lock_or_recover().remove(id).is_some();
-    if !removed { return; }
+    if !removed {
+        return;
+    }
     if let Some(win) = app.get_webview_window(&format!("bubble-{id}")) {
         let _ = win.destroy();
     }
@@ -85,10 +93,15 @@ pub fn close_bubble(app: &AppHandle, bubbles: &BubbleMap, id: &str) {
 }
 
 pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
-    let mut entries: Vec<(String, u32)> = bubbles.lock_or_recover()
-        .iter().map(|(id, e)| (id.clone(), e.measured_height)).collect();
+    let mut entries: Vec<(String, u32)> = bubbles
+        .lock_or_recover()
+        .iter()
+        .map(|(id, e)| (id.clone(), e.measured_height))
+        .collect();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
-    if entries.is_empty() { return; }
+    if entries.is_empty() {
+        return;
+    }
 
     let (screen_w, _) = get_work_area(app);
     let (anchor_x, anchor_y, pet_h) = get_pet_anchor(app);
@@ -129,7 +142,8 @@ pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
 fn center_bubble_x(pet_x: i32, pet_size: u32, screen_w: u32) -> i32 {
     let center = pet_x + pet_size as i32 / 2;
     let x = center - BUBBLE_WIDTH as i32 / 2;
-    x.max(BUBBLE_MARGIN as i32).min(screen_w as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32)
+    x.max(BUBBLE_MARGIN as i32)
+        .min(screen_w as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32)
 }
 
 /// Get pet window position and size as bubble anchor point.
@@ -139,15 +153,25 @@ fn get_pet_anchor(app: &AppHandle) -> (i32, i32, u32) {
     } else {
         // Fallback: bottom-right corner
         let (sw, sh) = get_work_area(app);
-        (sw as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32, sh as i32 - 200, 200)
+        (
+            sw as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32,
+            sh as i32 - 200,
+            200,
+        )
     }
 }
 
 /// Calculate bubble position for a given index in the stack (used by tests).
 #[cfg(test)]
-pub fn bubble_position_for_index(screen_w: u32, screen_h: u32, index: u32, bubble_height: u32) -> (u32, u32) {
+pub fn bubble_position_for_index(
+    screen_w: u32,
+    screen_h: u32,
+    index: u32,
+    bubble_height: u32,
+) -> (u32, u32) {
     let x = screen_w.saturating_sub(BUBBLE_WIDTH + BUBBLE_MARGIN);
-    let y = screen_h.saturating_sub(BUBBLE_MARGIN + bubble_height + index * (bubble_height + BUBBLE_GAP));
+    let y = screen_h
+        .saturating_sub(BUBBLE_MARGIN + bubble_height + index * (bubble_height + BUBBLE_GAP));
     (x, y)
 }
 
@@ -169,16 +193,14 @@ fn get_work_area(app: &AppHandle) -> (u32, u32) {
     }
     // Fallback to primary monitor
     app.primary_monitor()
-        .ok().flatten()
+        .ok()
+        .flatten()
         .map(|m| (m.size().width, m.size().height))
         .unwrap_or(crate::prefs::DEFAULT_SCREEN_SIZE)
 }
 
 #[tauri::command]
-pub fn get_bubble_data(
-    bubbles: tauri::State<BubbleMap>,
-    id: String,
-) -> Option<BubbleData> {
+pub fn get_bubble_data(bubbles: tauri::State<BubbleMap>, id: String) -> Option<BubbleData> {
     bubbles.lock_or_recover().get(&id).map(|e| e.data.clone())
 }
 

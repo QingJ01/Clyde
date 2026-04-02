@@ -1,5 +1,8 @@
 use std::future::IntoFuture;
 
+use crate::permission;
+use crate::state_machine::{SharedState, ONESHOT_STATES};
+use crate::util::MutexExt;
 use axum::{
     extract::State as AxumState,
     http::{HeaderMap, StatusCode},
@@ -10,17 +13,14 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::oneshot;
 use tauri::AppHandle;
-use crate::state_machine::{SharedState, ONESHOT_STATES};
-use crate::util::MutexExt;
-use crate::permission;
+use tokio::sync::oneshot;
 
 pub const CLYDE_SERVER_HEADER: &str = "x-clyde-server";
-pub const CLYDE_SERVER_ID:     &str = "clyde-on-desk";
-pub const DEFAULT_PORT:        u16  = 23333;
+pub const CLYDE_SERVER_ID: &str = "clyde-on-desk";
+pub const DEFAULT_PORT: u16 = 23333;
 
-pub type PermSender   = oneshot::Sender<PermDecision>;
+pub type PermSender = oneshot::Sender<PermDecision>;
 pub type PendingPerms = Arc<Mutex<HashMap<String, PermSender>>>;
 
 #[derive(Debug, Clone)]
@@ -32,23 +32,23 @@ pub enum PermDecision {
 
 #[derive(Clone)]
 struct ServerCtx {
-    state:         SharedState,
+    state: SharedState,
     pending_perms: PendingPerms,
-    app:           AppHandle,
-    bubble_map:    permission::BubbleMap,
-    mode_tracker:  crate::permission_mode::ModeTracker,
+    app: AppHandle,
+    bubble_map: permission::BubbleMap,
+    mode_tracker: crate::permission_mode::ModeTracker,
 }
 
 #[derive(Deserialize)]
 struct StatePayload {
-    state:      String,
+    state: String,
     #[allow(dead_code)]
-    svg:        Option<String>,
+    svg: Option<String>,
     session_id: Option<String>,
-    event:      Option<String>,
+    event: Option<String>,
     source_pid: Option<u32>,
-    cwd:        Option<String>,
-    agent_id:        Option<String>,
+    cwd: Option<String>,
+    agent_id: Option<String>,
     permission_mode: Option<String>,
 }
 
@@ -66,7 +66,7 @@ async fn post_state(
     let mut headers = HeaderMap::new();
     headers.insert(CLYDE_SERVER_HEADER, CLYDE_SERVER_ID.parse().unwrap());
 
-    let sid   = payload.session_id.unwrap_or_else(|| "default".into());
+    let sid = payload.session_id.unwrap_or_else(|| "default".into());
     let event = payload.event.unwrap_or_default();
 
     let (new_state, new_svg) = {
@@ -83,15 +83,21 @@ async fn post_state(
             sm.update_session_state(&sid, &payload.state, &event);
             // Store metadata on the session entry
             if let Some(entry) = sm.sessions.get_mut(&sid) {
-                if let Some(pid) = payload.source_pid { entry.source_pid = Some(pid); }
-                if let Some(ref cwd) = payload.cwd { entry.cwd = cwd.clone(); }
-                if let Some(ref aid) = payload.agent_id { entry.agent_id = aid.clone(); }
+                if let Some(pid) = payload.source_pid {
+                    entry.source_pid = Some(pid);
+                }
+                if let Some(ref cwd) = payload.cwd {
+                    entry.cwd = cwd.clone();
+                }
+                if let Some(ref aid) = payload.agent_id {
+                    entry.agent_id = aid.clone();
+                }
             }
         }
         let resolved = sm.resolve_display_state();
         // For SessionEnd, the payload state is semantically meaningless — skip oneshot branch (IMPORTANT-2)
         let is_session_end = event == "SessionEnd";
-        let svg      = if !is_session_end && ONESHOT_STATES.contains(&payload.state.as_str()) {
+        let svg = if !is_session_end && ONESHOT_STATES.contains(&payload.state.as_str()) {
             sm.svg_for_state(&payload.state)
         } else {
             sm.svg_for_state(&resolved)
@@ -110,12 +116,18 @@ async fn post_state(
     // Update permission mode if provided
     if let Some(ref mode) = payload.permission_mode {
         use tauri::Manager;
-        let lang = ctx.app.try_state::<crate::prefs::SharedPrefs>()
+        let lang = ctx
+            .app
+            .try_state::<crate::prefs::SharedPrefs>()
             .map(|p: tauri::State<crate::prefs::SharedPrefs>| p.lock_or_recover().lang.clone())
             .unwrap_or_else(|| "en".into());
         crate::permission_mode::update_session_mode(
-            &ctx.app, &ctx.mode_tracker, &sid, mode,
-            crate::permission_mode::ModeSource::Hook, &lang,
+            &ctx.app,
+            &ctx.mode_tracker,
+            &sid,
+            mode,
+            crate::permission_mode::ModeSource::Hook,
+            &lang,
         );
     }
 
@@ -138,19 +150,38 @@ async fn post_permission(
     headers.insert(CLYDE_SERVER_HEADER, CLYDE_SERVER_ID.parse().unwrap());
 
     // Log raw payload for debugging field name mismatches
-    eprintln!("Clyde: /permission payload keys: {:?}",
-        payload.as_object().map(|o| o.keys().collect::<Vec<_>>()).unwrap_or_default());
+    eprintln!(
+        "Clyde: /permission payload keys: {:?}",
+        payload
+            .as_object()
+            .map(|o| o.keys().collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
 
     // Extract fields — try both snake_case and camelCase variants
-    let tool_name = payload.get("tool_name").or_else(|| payload.get("toolName"))
-        .and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-    let tool_input = payload.get("tool_input").or_else(|| payload.get("toolInput"))
-        .cloned().unwrap_or(json!({}));
-    let session_id = payload.get("session_id").or_else(|| payload.get("sessionId"))
-        .and_then(|v| v.as_str()).unwrap_or("default").to_string();
-    let suggestions = payload.get("permission_suggestions")
+    let tool_name = payload
+        .get("tool_name")
+        .or_else(|| payload.get("toolName"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let tool_input = payload
+        .get("tool_input")
+        .or_else(|| payload.get("toolInput"))
+        .cloned()
+        .unwrap_or(json!({}));
+    let session_id = payload
+        .get("session_id")
+        .or_else(|| payload.get("sessionId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+    let suggestions = payload
+        .get("permission_suggestions")
         .or_else(|| payload.get("permissionSuggestions"))
-        .and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     let entry_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel::<PermDecision>();
@@ -169,9 +200,15 @@ async fn post_permission(
 
     let bubble_opened = permission::show_bubble(&ctx.app, &ctx.bubble_map, bubble_data);
     if !bubble_opened {
-        return (StatusCode::OK, headers, Json(perm_response(&PermDecision::Deny)));
+        return (
+            StatusCode::OK,
+            headers,
+            Json(perm_response(&PermDecision::Deny)),
+        );
     }
-    ctx.pending_perms.lock_or_recover().insert(entry_id.clone(), tx);
+    ctx.pending_perms
+        .lock_or_recover()
+        .insert(entry_id.clone(), tx);
 
     // Wait for user to click in bubble, or timeout.
     // Auto-close: a background watcher (see spawn below) checks if the HTTP client
@@ -188,15 +225,24 @@ async fn post_permission(
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
         loop {
             interval.tick().await;
-            if tokio::time::Instant::now() > deadline { break; }
+            if tokio::time::Instant::now() > deadline {
+                break;
+            }
             // Check if the entry was already resolved
-            let still_pending = watchdog_ctx.pending_perms
+            let still_pending = watchdog_ctx
+                .pending_perms
                 .lock_or_recover()
                 .contains_key(&watchdog_id);
-            if !still_pending { return; } // resolved by user click — nothing to do
+            if !still_pending {
+                return;
+            } // resolved by user click — nothing to do
         }
         // Timeout: close bubble and send default deny
-        if let Some(tx) = watchdog_ctx.pending_perms.lock_or_recover().remove(&watchdog_id) {
+        if let Some(tx) = watchdog_ctx
+            .pending_perms
+            .lock_or_recover()
+            .remove(&watchdog_id)
+        {
             let _ = tx.send(PermDecision::Deny);
         }
         permission::close_bubble(&watchdog_ctx.app, &watchdog_ctx.bubble_map, &watchdog_id);
@@ -230,12 +276,24 @@ fn perm_response(decision: &PermDecision) -> Value {
     })
 }
 
-pub async fn start_server(app: AppHandle, state: SharedState, pending_perms: PendingPerms, bubble_map: permission::BubbleMap, mode_tracker: crate::permission_mode::ModeTracker) -> Option<u16> {
-    let ctx = ServerCtx { state, pending_perms, app, bubble_map, mode_tracker };
+pub async fn start_server(
+    app: AppHandle,
+    state: SharedState,
+    pending_perms: PendingPerms,
+    bubble_map: permission::BubbleMap,
+    mode_tracker: crate::permission_mode::ModeTracker,
+) -> Option<u16> {
+    let ctx = ServerCtx {
+        state,
+        pending_perms,
+        app,
+        bubble_map,
+        mode_tracker,
+    };
 
     let router = Router::new()
-        .route("/state",      get(health))
-        .route("/state",      post(post_state))
+        .route("/state", get(health))
+        .route("/state", post(post_state))
         .route("/permission", post(post_permission))
         .with_state(ctx);
 
@@ -249,7 +307,10 @@ pub async fn start_server(app: AppHandle, state: SharedState, pending_perms: Pen
             return Some(actual_port);
         }
     }
-    eprintln!("Clyde: no available ports in range {DEFAULT_PORT}-{}", DEFAULT_PORT + 6);
+    eprintln!(
+        "Clyde: no available ports in range {DEFAULT_PORT}-{}",
+        DEFAULT_PORT + 6
+    );
     None
 }
 
@@ -264,7 +325,12 @@ fn write_runtime_port(port: u16) {
             "port": port
         });
         let tmp = path.with_extension("json.tmp");
-        if std::fs::write(&tmp, serde_json::to_string_pretty(&json).unwrap_or_default()).is_ok() {
+        if std::fs::write(
+            &tmp,
+            serde_json::to_string_pretty(&json).unwrap_or_default(),
+        )
+        .is_ok()
+        {
             let _ = std::fs::rename(&tmp, &path);
         }
     }
@@ -299,15 +365,21 @@ mod tests {
     #[test]
     fn test_perm_response_allow() {
         let resp = perm_response(&PermDecision::Allow);
-        let behavior = resp["hookSpecificOutput"]["decision"]["behavior"].as_str().unwrap();
+        let behavior = resp["hookSpecificOutput"]["decision"]["behavior"]
+            .as_str()
+            .unwrap();
         assert_eq!(behavior, "allow");
-        assert!(resp["hookSpecificOutput"]["decision"].get("updatedPermissions").is_none());
+        assert!(resp["hookSpecificOutput"]["decision"]
+            .get("updatedPermissions")
+            .is_none());
     }
 
     #[test]
     fn test_perm_response_deny() {
         let resp = perm_response(&PermDecision::Deny);
-        let behavior = resp["hookSpecificOutput"]["decision"]["behavior"].as_str().unwrap();
+        let behavior = resp["hookSpecificOutput"]["decision"]["behavior"]
+            .as_str()
+            .unwrap();
         assert_eq!(behavior, "deny");
     }
 
@@ -317,7 +389,9 @@ mod tests {
             "type": "addRules",
             "rules": [{ "tool_name": "Read", "behavior": "allow" }]
         });
-        let resp = perm_response(&PermDecision::AllowWithPermissions(vec![suggestion.clone()]));
+        let resp = perm_response(&PermDecision::AllowWithPermissions(
+            vec![suggestion.clone()],
+        ));
         let decision = &resp["hookSpecificOutput"]["decision"];
         assert_eq!(decision["behavior"].as_str().unwrap(), "allow");
         let perms = decision["updatedPermissions"].as_array().unwrap();
