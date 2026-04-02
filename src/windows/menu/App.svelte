@@ -88,6 +88,15 @@
     return `${Math.floor(seconds / 86400)}d ago`;
   }
 
+  function agentMeta(agent: string): { label: string; kind: string } {
+    const normalized = agent.trim().toLowerCase();
+    if (normalized.includes('claude')) return { label: 'Claude', kind: 'claude' };
+    if (normalized.includes('codex')) return { label: 'Codex', kind: 'codex' };
+    if (normalized.includes('copilot')) return { label: 'Copilot', kind: 'copilot' };
+    if (!normalized) return { label: 'Unknown', kind: 'unknown' };
+    return { label: agent.trim(), kind: 'generic' };
+  }
+
   async function action(id: string) {
     if (closing) return;
     closing = true;
@@ -224,9 +233,10 @@
           <div class="item disabled">{t('noSessions')}</div>
         {:else}
           {#each data.sessions as sess}
+            {@const meta = agentMeta(sess.agent)}
             <button class="item session-item" onclick={() => action(`session-${sess.id}`)}>
               <span class="session-icon">{stateIcons[sess.state] ?? '⚡'}</span>
-              <span class="session-agent">{sess.agent}</span>
+              <span class={`session-agent agent-${meta.kind}`}>{meta.label}</span>
               <span class="session-state">{stateLabel(sess.state)}</span>
               <span class="session-time">{sessionAgeLabel(sess.updated_secs_ago)}</span>
             </button>
@@ -377,9 +387,32 @@
     flex-shrink: 0;
   }
   .session-agent {
+    display: inline-flex;
+    align-items: center;
+    min-width: 58px;
+    padding: 3px 8px;
+    border-radius: 999px;
     font-weight: 600;
-    font-size: 12.5px;
+    font-size: 11.5px;
+    letter-spacing: 0.01em;
     color: #1d1d1f;
+    background: rgba(17, 24, 39, 0.08);
+    border: 1px solid rgba(17, 24, 39, 0.08);
+  }
+  .session-agent.agent-claude {
+    color: #7c2d12;
+    background: rgba(251, 146, 60, 0.18);
+    border-color: rgba(249, 115, 22, 0.2);
+  }
+  .session-agent.agent-codex {
+    color: #0f4c5c;
+    background: rgba(45, 212, 191, 0.18);
+    border-color: rgba(13, 148, 136, 0.2);
+  }
+  .session-agent.agent-copilot {
+    color: #1d4ed8;
+    background: rgba(96, 165, 250, 0.18);
+    border-color: rgba(59, 130, 246, 0.2);
   }
   .session-state {
     font-size: 12px;

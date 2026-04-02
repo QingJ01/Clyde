@@ -170,6 +170,21 @@ pub(crate) fn platform_limited_menu_label(
     }
 }
 
+pub(crate) fn display_agent_label(agent: &str) -> String {
+    let normalized = agent.trim().to_ascii_lowercase();
+    if normalized.contains("claude") {
+        "Claude".into()
+    } else if normalized.contains("codex") {
+        "Codex".into()
+    } else if normalized.contains("copilot") {
+        "Copilot".into()
+    } else if agent.trim().is_empty() {
+        "Unknown".into()
+    } else {
+        agent.trim().into()
+    }
+}
+
 fn apply_click_through(app: &AppHandle, enabled: bool) {
     let Some(hit) = app.get_webview_window("hit") else {
         return;
@@ -697,8 +712,9 @@ fn show_context_menu(
                 "sleeping" => i18n::t("sessionSleeping", &lang),
                 _ => sess_state.clone(),
             };
+            let agent_label = display_agent_label(agent);
             let label = format!(
-                "{icon} {agent}  {state_label}  {}",
+                "{icon} {agent_label}  {state_label}  {}",
                 format_relative_time(*age_secs, &lang)
             );
             let item_id = format!("ctx-session-{}", sid);
@@ -802,7 +818,7 @@ fn get_menu_data(
             |(id, session_state, pid, agent, updated_secs_ago)| MenuSession {
                 id,
                 state: session_state,
-                agent,
+                agent: display_agent_label(&agent),
                 pid,
                 updated_secs_ago,
             },
