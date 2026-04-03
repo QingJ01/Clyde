@@ -1799,9 +1799,7 @@ pub fn run() {
         .manage(mini::AnimationGeneration::new(
             std::sync::atomic::AtomicU64::new(0),
         ))
-        .manage(mini::PeekSuppressDeadline::new(
-            std::sync::atomic::AtomicU64::new(0),
-        ))
+        .manage(mini::PeekSuppressDeadline::new())
         .manage(bubble_map.clone())
         .manage(mode_tracker.clone())
         .manage(shared_tray.clone())

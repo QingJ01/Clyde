@@ -14,7 +14,21 @@ pub type AnimationGeneration = Arc<AtomicU64>;
 
 /// Epoch-millis deadline: peek detection is suppressed until this instant passes.
 /// Set when entering mini mode so the entry animation isn't hijacked by peek_in.
-pub type PeekSuppressDeadline = Arc<AtomicU64>;
+/// Newtype wrapper to avoid Tauri managed-state collision with AnimationGeneration.
+#[derive(Clone)]
+pub struct PeekSuppressDeadline(Arc<AtomicU64>);
+
+impl PeekSuppressDeadline {
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicU64::new(0)))
+    }
+    pub fn load(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+    pub fn store(&self, val: u64) {
+        self.0.store(val, Ordering::SeqCst);
+    }
+}
 
 /// Logical-pixel constants — must be scaled by DPI before use in physical coords.
 const SNAP_TOLERANCE_LP: f64 = 30.0;
@@ -25,12 +39,11 @@ pub const MINI_OFFSET_RATIO: f64 = 0.486;
 pub fn is_peek_suppressed(app: &AppHandle) -> bool {
     app.try_state::<PeekSuppressDeadline>()
         .map(|d| {
-            let deadline = d.load(Ordering::SeqCst);
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            now < deadline
+            now < d.load()
         })
         .unwrap_or(false)
 }
@@ -41,7 +54,7 @@ fn suppress_peek_for(app: &AppHandle, ms: u64) {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        d.store(now + ms, Ordering::SeqCst);
+        d.store(now + ms);
     }
 }
 
