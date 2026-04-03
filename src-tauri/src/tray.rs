@@ -292,7 +292,7 @@ fn apply_size(app: &AppHandle, size_str: &str) {
         let _ = pet.set_size(tauri::PhysicalSize::new(w, h));
         if let Some(current) = current_bounds {
             let updated = windows::resized_pet_bounds(&current, w, h);
-            windows::sync_hit_window(app, &updated, &windows::HitBox::INTERACTIVE);
+            crate::sync_hit_for_bounds(app, &updated);
         }
     }
     if let Some(prefs_state) = app.try_state::<SharedPrefs>() {

@@ -397,6 +397,7 @@ async fn post_state(
     };
 
     crate::emit_state(&ctx.app, &new_state, &new_svg);
+    crate::sync_hit(&ctx.app);
 
     // Update permission mode if provided
     if let Some(ref mode) = payload.permission_mode {

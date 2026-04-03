@@ -144,6 +144,7 @@ fn codex_update_and_emit(
         (resolved, svg)
     };
     crate::emit_state(app, &resolved, &svg);
+    crate::sync_hit(app);
 }
 
 /// Map a Codex JSONL entry to a Clyde animation state.
