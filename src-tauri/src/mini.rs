@@ -12,10 +12,38 @@ use tauri::{AppHandle, Manager, PhysicalPosition};
 /// advances while an animation is running, the old animation stops.
 pub type AnimationGeneration = Arc<AtomicU64>;
 
+/// Epoch-millis deadline: peek detection is suppressed until this instant passes.
+/// Set when entering mini mode so the entry animation isn't hijacked by peek_in.
+pub type PeekSuppressDeadline = Arc<AtomicU64>;
+
 /// Logical-pixel constants — must be scaled by DPI before use in physical coords.
 const SNAP_TOLERANCE_LP: f64 = 30.0;
 const PEEK_OFFSET_LP: f64 = 25.0;
 pub const MINI_OFFSET_RATIO: f64 = 0.486;
+
+/// Check if peek detection is currently suppressed (during entry animation).
+pub fn is_peek_suppressed(app: &AppHandle) -> bool {
+    app.try_state::<PeekSuppressDeadline>()
+        .map(|d| {
+            let deadline = d.load(Ordering::SeqCst);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            now < deadline
+        })
+        .unwrap_or(false)
+}
+
+fn suppress_peek_for(app: &AppHandle, ms: u64) {
+    if let Some(d) = app.try_state::<PeekSuppressDeadline>() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        d.store(now + ms, Ordering::SeqCst);
+    }
+}
 
 /// Snap tolerance in physical pixels for the current DPI.
 pub fn snap_tolerance(app: &AppHandle) -> i32 {
@@ -232,6 +260,9 @@ pub fn do_enter_mini(app: &AppHandle) -> bool {
     }
 
     emit_state(app, "mini-idle", "clyde-mini-enter.svg");
+    // Suppress peek detection for the entry animation duration so peek_in
+    // doesn't hijack the animation and leave the pet away from the edge.
+    suppress_peek_for(app, 400);
     // animate_to_x automatically syncs hit window when animation completes
     animate_to_x(app, hidden_x, 300);
     true

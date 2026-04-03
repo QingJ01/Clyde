@@ -124,7 +124,7 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
             // is blocked until the retraction animation finishes.
             {
                 let is_mini = crate::prefs::is_mini_mode(&app);
-                if is_mini {
+                if is_mini && !crate::mini::is_peek_suppressed(&app) {
                     if let Some(bounds) = get_pet_bounds(&app) {
                         // Use only the on-screen (visible) portion for near detection
                         // so the detection zone matches what the user actually sees.
