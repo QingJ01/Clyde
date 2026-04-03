@@ -17,6 +17,9 @@ pub struct TickState {
     pub last_eye_dx: f64,
     pub last_eye_dy: f64,
     pub is_peeking: bool,
+    /// When peek_out was last triggered — used to prevent peek_in from
+    /// re-triggering while the retraction animation is still running.
+    pub peek_out_at: Option<Instant>,
 }
 
 impl Default for TickState {
@@ -28,6 +31,7 @@ impl Default for TickState {
             last_eye_dx: 0.0,
             last_eye_dy: 0.0,
             is_peeking: false,
+            peek_out_at: None,
         }
     }
 }
@@ -117,12 +121,19 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
                             && cy <= (bounds.y + bounds.height as i32) as f64;
                         let mut ts = tick_clone.lock_or_recover();
                         let was_peeking = ts.is_peeking;
-                        if near && !was_peeking {
+                        // Cooldown: don't re-trigger peek_in while the peek_out
+                        // animation is still running (200ms + 50ms margin).
+                        let in_cooldown = ts
+                            .peek_out_at
+                            .map_or(false, |t| t.elapsed() < Duration::from_millis(250));
+                        if near && !was_peeking && !in_cooldown {
                             ts.is_peeking = true;
+                            ts.peek_out_at = None;
                             drop(ts);
                             let _ = app.emit("mini-peek-in", ());
                         } else if !near && was_peeking {
                             ts.is_peeking = false;
+                            ts.peek_out_at = Some(Instant::now());
                             drop(ts);
                             let _ = app.emit("mini-peek-out", ());
                         }
