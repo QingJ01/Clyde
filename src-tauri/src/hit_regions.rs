@@ -67,11 +67,14 @@ const SLEEPING_RECTS: &[RelativeHitRect] = &[
     },
 ];
 
+// Mini mode: cover the visible portion generously.
+// In mini mode ~48.6% of the pet is visible (MINI_OFFSET_RATIO),
+// so the hit region must span the exposed side of the window.
 const MINI_RECTS: &[RelativeHitRect] = &[RelativeHitRect {
-    x: 0.28,
-    y: 0.30,
-    width: 0.44,
-    height: 0.40,
+    x: 0.05,
+    y: 0.10,
+    width: 0.90,
+    height: 0.80,
 }];
 
 pub fn profile_for_svg(svg: &str) -> HitProfileKey {

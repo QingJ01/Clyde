@@ -3,8 +3,14 @@ use crate::state_machine::SharedState;
 use crate::util::MutexExt;
 use crate::windows::{self, get_pet_bounds, MonitorArea, WindowBounds};
 use crate::{emit_state, sync_hit};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, PhysicalPosition};
+
+/// Monotonic generation counter — each new animation bumps this; if the counter
+/// advances while an animation is running, the old animation stops.
+pub type AnimationGeneration = Arc<AtomicU64>;
 
 /// Logical-pixel constants — must be scaled by DPI before use in physical coords.
 const SNAP_TOLERANCE_LP: f64 = 30.0;
@@ -285,10 +291,27 @@ pub fn peek_out(app: &AppHandle) {
 }
 
 /// Animate window to target X in steps (ease-out quadratic).
-/// Automatically syncs the hit window after the animation completes.
+/// Bumps the generation counter so any in-flight animation stops.
+/// Syncs hit window only if this animation was not superseded.
 pub fn animate_to_x(app: &AppHandle, target_x: i32, duration_ms: u64) {
+    // Bump generation — any older animation will see its gen is stale and stop
+    let gen = app
+        .try_state::<AnimationGeneration>()
+        .map(|g| {
+            let new = g.fetch_add(1, Ordering::SeqCst) + 1;
+            (g.inner().clone(), new)
+        });
+
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let (gen_arc, my_gen) = match gen {
+            Some(pair) => pair,
+            None => {
+                sync_hit(&app);
+                return;
+            }
+        };
+
         if let Some(pet) = app.get_webview_window("pet") {
             let start_pos = pet.outer_position().unwrap_or_default();
             let start_x = start_pos.x;
@@ -302,13 +325,17 @@ pub fn animate_to_x(app: &AppHandle, target_x: i32, duration_ms: u64) {
             let mut interval = tokio::time::interval(Duration::from_millis(16));
             for i in 1..=steps {
                 interval.tick().await;
+                if gen_arc.load(Ordering::SeqCst) != my_gen {
+                    return; // superseded by a newer animation
+                }
                 let t = i as f64 / steps as f64;
                 let eased = t * (2.0 - t); // ease-out quad
                 let x = (start_x as f64 + (target_x - start_x) as f64 * eased).round() as i32;
                 let _ = pet.set_position(PhysicalPosition::new(x, start_y));
             }
         }
-        // Always sync hit window after animation so the click area matches the pet
-        sync_hit(&app);
+        if gen_arc.load(Ordering::SeqCst) == my_gen {
+            sync_hit(&app);
+        }
     });
 }

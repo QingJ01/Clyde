@@ -459,7 +459,10 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
         width: pet_w,
         height: pet_h,
     };
-    sync_hit_for_bounds(&app, &updated);
+    // During drag: just reposition the hit window without emitting layout changes
+    // to the frontend. Re-rendering hit-zone divs mid-drag disrupts pointer events.
+    let profile = current_hit_profile(&app);
+    let _ = windows::sync_hit_window(&app, &updated, &profile);
     emit_snap_preview(
         &app,
         mini::edge_snap_for_bounds(&app, &updated).map(|snap| snap.side),
@@ -1152,6 +1155,12 @@ fn is_left_mini(app: &AppHandle) -> bool {
 }
 
 pub(crate) fn sync_hit(app: &AppHandle) {
+    // Skip hit region updates while dragging — the hit window follows the pet
+    // via drag_move's sync_hit_for_bounds, and re-rendering regions mid-drag
+    // causes pointer event disruption (visible as jitter/twitching).
+    if drag_in_progress(app) {
+        return;
+    }
     if let Some(bounds) = windows::get_pet_bounds(app) {
         sync_hit_for_bounds(app, &bounds);
     }
@@ -1787,6 +1796,9 @@ pub fn run() {
         .manage(approval_queue.clone())
         .manage(shared_prefs.clone())
         .manage(sleep_abort.clone())
+        .manage(mini::AnimationGeneration::new(
+            std::sync::atomic::AtomicU64::new(0),
+        ))
         .manage(bubble_map.clone())
         .manage(mode_tracker.clone())
         .manage(shared_tray.clone())
