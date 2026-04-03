@@ -9,6 +9,22 @@ use tauri::{AppHandle, Emitter, Manager};
 const TICK_INTERVAL_MS: u64 = 50;
 const MOUSE_SLEEP_MS: u64 = 60_000;
 
+/// Peek animation duration + margin — used to block re-peek during retraction.
+const PEEK_ANIMATION_MS: u64 = 250;
+
+/// Three-phase peek state machine to prevent oscillation.
+/// Hidden → Peeking (mouse enters) → Retracting (mouse leaves) → Hidden.
+/// While Retracting, new peek_in is blocked until the animation completes.
+#[derive(Debug, Clone)]
+pub enum PeekPhase {
+    /// Pet is hidden at edge. Can transition to Peeking if mouse is near.
+    Hidden,
+    /// Pet is peeked out. Can transition to Retracting if mouse leaves.
+    Peeking,
+    /// Pet is animating back to hidden position. No new peek_in until done.
+    Retracting(Instant),
+}
+
 #[derive(Debug, Clone)]
 pub struct TickState {
     pub mouse_still_since: Instant,
@@ -16,10 +32,7 @@ pub struct TickState {
     pub has_triggered_wake: bool,
     pub last_eye_dx: f64,
     pub last_eye_dy: f64,
-    pub is_peeking: bool,
-    /// When peek_out was last triggered — used to prevent peek_in from
-    /// re-triggering while the retraction animation is still running.
-    pub peek_out_at: Option<Instant>,
+    pub peek_phase: PeekPhase,
 }
 
 impl Default for TickState {
@@ -30,8 +43,7 @@ impl Default for TickState {
             has_triggered_wake: false,
             last_eye_dx: 0.0,
             last_eye_dy: 0.0,
-            is_peeking: false,
-            peek_out_at: None,
+            peek_phase: PeekPhase::Hidden,
         }
     }
 }
@@ -107,39 +119,65 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
                 let _ = app.emit("trigger-yawn", ());
             }
 
-            // Mini mode hover peek: detect mouse near pet in mini mode.
-            // Single lock acquisition for all peek state reads/writes.
+            // Mini mode hover peek: three-phase state machine to prevent oscillation.
+            // Hidden → Peeking → Retracting → Hidden.  While Retracting, peek_in
+            // is blocked until the retraction animation finishes.
             {
                 let is_mini = crate::prefs::is_mini_mode(&app);
                 if is_mini {
                     if let Some(bounds) = get_pet_bounds(&app) {
-                        // Symmetric 10 logical-px margin around pet for peek detection
+                        // Use only the on-screen (visible) portion for near detection
+                        // so the detection zone matches what the user actually sees.
+                        let monitor = windows::monitor_for_bounds(&app, &bounds);
+                        let (vis_x, vis_w) = if let Some(ref m) = monitor {
+                            let left = bounds.x.max(m.x);
+                            let right = (bounds.x + bounds.width as i32)
+                                .min(m.x + m.width as i32);
+                            (left, (right - left).max(0))
+                        } else {
+                            (bounds.x, bounds.width as i32)
+                        };
                         let margin = (10.0 * windows::pet_scale_factor(&app)).round() as i32;
-                        let near = cx >= (bounds.x - margin) as f64
-                            && cx <= (bounds.x + bounds.width as i32 + margin) as f64
+                        let near = cx >= (vis_x - margin) as f64
+                            && cx <= (vis_x + vis_w + margin) as f64
                             && cy >= bounds.y as f64
                             && cy <= (bounds.y + bounds.height as i32) as f64;
+
                         let mut ts = tick_clone.lock_or_recover();
-                        let was_peeking = ts.is_peeking;
-                        // Cooldown: don't re-trigger peek_in while the peek_out
-                        // animation is still running (200ms + 50ms margin).
-                        let in_cooldown = ts
-                            .peek_out_at
-                            .map_or(false, |t| t.elapsed() < Duration::from_millis(250));
-                        if near && !was_peeking && !in_cooldown {
-                            ts.is_peeking = true;
-                            ts.peek_out_at = None;
-                            drop(ts);
-                            let _ = app.emit("mini-peek-in", ());
-                        } else if !near && was_peeking {
-                            ts.is_peeking = false;
-                            ts.peek_out_at = Some(Instant::now());
-                            drop(ts);
-                            let _ = app.emit("mini-peek-out", ());
+                        match ts.peek_phase {
+                            PeekPhase::Hidden => {
+                                if near {
+                                    ts.peek_phase = PeekPhase::Peeking;
+                                    drop(ts);
+                                    let _ = app.emit("mini-peek-in", ());
+                                }
+                            }
+                            PeekPhase::Peeking => {
+                                if !near {
+                                    ts.peek_phase =
+                                        PeekPhase::Retracting(Instant::now());
+                                    drop(ts);
+                                    let _ = app.emit("mini-peek-out", ());
+                                }
+                            }
+                            PeekPhase::Retracting(started) => {
+                                let done = started.elapsed()
+                                    >= Duration::from_millis(PEEK_ANIMATION_MS);
+                                if done && !near {
+                                    // Animation finished, mouse is away → fully hidden
+                                    ts.peek_phase = PeekPhase::Hidden;
+                                } else if done && near {
+                                    // Animation finished but mouse came back → re-peek
+                                    ts.peek_phase = PeekPhase::Peeking;
+                                    drop(ts);
+                                    let _ = app.emit("mini-peek-in", ());
+                                }
+                                // If !done: stay Retracting, block all transitions
+                            }
                         }
                     }
                 } else {
-                    tick_clone.lock_or_recover().is_peeking = false;
+                    tick_clone.lock_or_recover().peek_phase = PeekPhase::Hidden;
                 }
             }
 

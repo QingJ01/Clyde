@@ -48,6 +48,9 @@
     promptedLockedMenu = false;
     startX = e.screenX;
     startY = e.screenY;
+    // Capture pointer so events keep flowing even if cursor leaves the hit window
+    // (critical for mini mode where the hit window is very small).
+    (e.target as Element)?.setPointerCapture(e.pointerId);
     if (positionLocked) return;
 
     invoke('drag_start', { x: startX, y: startY });
@@ -93,6 +96,7 @@
   function onPointerUp(e: PointerEvent) {
     if (!pointerActive) return;
     if (activePointerId !== null && e.pointerId !== activePointerId) return;
+    (e.target as Element)?.releasePointerCapture(e.pointerId);
     pointerActive = false;
     activePointerId = null;
     snapSide = null;
@@ -102,8 +106,9 @@
     }
   }
 
-  function onPointerCancel() {
+  function onPointerCancel(e: PointerEvent) {
     if (!pointerActive) return;
+    (e.target as Element)?.releasePointerCapture(e.pointerId);
     pointerActive = false;
     activePointerId = null;
     snapSide = null;
