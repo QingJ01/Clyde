@@ -94,7 +94,8 @@ type SharedDrag = Arc<Mutex<DragState>>;
 
 /// Minimum mouse distance (physical pixels) before a drag actually starts.
 const DRAG_THRESHOLD: f64 = 3.0;
-const STARTUP_MIN_VISIBLE: i32 = 120;
+/// Minimum visible area (logical px) at startup — scaled by DPI at use sites.
+const STARTUP_MIN_VISIBLE_LP: f64 = 120.0;
 const DISPLAY_REPAIR_DELAY_MS: u64 = 120;
 
 #[cfg(target_os = "macos")]
@@ -104,6 +105,10 @@ const MAC_HIT_REGION_FALLBACK_ALPHA: f32 = 0.0;
 
 fn pointer_alpha_for_hit_regions() -> f32 {
     MAC_HIT_REGION_FALLBACK_ALPHA
+}
+
+fn startup_min_visible(app: &AppHandle) -> i32 {
+    (STARTUP_MIN_VISIBLE_LP * windows::pet_scale_factor(app)).round() as i32
 }
 
 fn emit_snap_preview(app: &AppHandle, side: Option<mini::SnapSide>) {
@@ -433,13 +438,13 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
         height: pet_h,
     };
 
-    // Clamp to screen bounds: keep at least 30px of the pet visible
+    // Clamp to screen bounds: keep at least 30 logical px of the pet visible
     if let Some(monitor) = windows::monitor_for_bounds(&app, &probe_bounds)
         .or_else(|| windows::current_monitor_for_pet(&app))
     {
-        const MIN_VISIBLE: i32 = 30;
+        let min_visible = (30.0 * windows::pet_scale_factor(&app)).round() as i32;
         (new_x, new_y) =
-            windows::clamp_window_to_monitor(new_x, new_y, pet_w, pet_h, &monitor, MIN_VISIBLE);
+            windows::clamp_window_to_monitor(new_x, new_y, pet_w, pet_h, &monitor, min_visible);
     }
 
     // All coords are physical pixels — set_position directly
@@ -1256,11 +1261,14 @@ fn should_restore_saved_single_monitor_position(
     current: &windows::WindowBounds,
     monitor: &windows::MonitorArea,
     saved: &prefs::MonitorPlacement,
+    scale: f64,
 ) -> bool {
-    let near_left = (current.x - monitor.x).abs() <= 36;
-    let near_top = (current.y - monitor.y).abs() <= 36;
-    let saved_far_x = (saved.x - current.x).abs() >= 80;
-    let saved_far_y = (saved.y - current.y).abs() >= 80;
+    let near_threshold = (36.0 * scale).round() as i32;
+    let far_threshold = (80.0 * scale).round() as i32;
+    let near_left = (current.x - monitor.x).abs() <= near_threshold;
+    let near_top = (current.y - monitor.y).abs() <= near_threshold;
+    let saved_far_x = (saved.x - current.x).abs() >= far_threshold;
+    let saved_far_y = (saved.y - current.y).abs() >= far_threshold;
     (near_left || near_top) && (saved_far_x || saved_far_y)
 }
 
@@ -1283,6 +1291,7 @@ fn reconcile_pet_geometry(app: &AppHandle) {
                         &current_bounds,
                         &monitors[0],
                         placement,
+                        windows::pet_scale_factor(app),
                     ) {
                         target.x = placement.x;
                         target.y = placement.y;
@@ -1300,7 +1309,7 @@ fn reconcile_pet_geometry(app: &AppHandle) {
     }
 
     let (resolved_x, resolved_y) =
-        windows::startup_position_for_bounds(app, &target, STARTUP_MIN_VISIBLE);
+        windows::startup_position_for_bounds(app, &target, startup_min_visible(app));
     let resolved = windows::WindowBounds {
         x: resolved_x,
         y: resolved_y,
@@ -1611,7 +1620,7 @@ fn setup_pet_window(app: &AppHandle, prefs: &prefs::Prefs) -> Option<windows::Wi
     let desired_bounds = preferred_bounds_for_current_display(app, prefs);
     let (w, h) = (desired_bounds.width, desired_bounds.height);
     let (resolved_x, resolved_y) =
-        windows::startup_position_for_bounds(app, &desired_bounds, STARTUP_MIN_VISIBLE);
+        windows::startup_position_for_bounds(app, &desired_bounds, startup_min_visible(app));
     let resolved_bounds = windows::WindowBounds {
         x: resolved_x,
         y: resolved_y,

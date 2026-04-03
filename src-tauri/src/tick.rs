@@ -1,6 +1,6 @@
 use crate::state_machine::SharedState;
 use crate::util::MutexExt;
-use crate::windows::{compute_hit_rect, get_pet_bounds, HitBox};
+use crate::windows::{self, compute_hit_rect, get_pet_bounds, HitBox};
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -109,9 +109,10 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
                 let is_mini = crate::prefs::is_mini_mode(&app);
                 if is_mini {
                     if let Some(bounds) = get_pet_bounds(&app) {
-                        // Symmetric 10px margin around pet for peek detection
-                        let near = cx >= (bounds.x - 10) as f64
-                            && cx <= (bounds.x + bounds.width as i32 + 10) as f64
+                        // Symmetric 10 logical-px margin around pet for peek detection
+                        let margin = (10.0 * windows::pet_scale_factor(&app)).round() as i32;
+                        let near = cx >= (bounds.x - margin) as f64
+                            && cx <= (bounds.x + bounds.width as i32 + margin) as f64
                             && cy >= bounds.y as f64
                             && cy <= (bounds.y + bounds.height as i32) as f64;
                         let mut ts = tick_clone.lock_or_recover();
@@ -137,8 +138,11 @@ pub fn start_tick(app: AppHandle, state: SharedState) -> SharedTickState {
                     let rect = compute_hit_rect(&bounds, &HitBox::DEFAULT);
                     let center_x = (rect.left + rect.right) / 2.0;
                     let center_y = (rect.top + rect.bottom) / 2.0;
-                    let raw_dx = cx - center_x;
-                    let raw_dy = cy - center_y;
+                    // Convert physical-pixel deltas to logical so the
+                    // directional normalization is DPI-independent.
+                    let scale = windows::pet_scale_factor(&app);
+                    let raw_dx = (cx - center_x) / scale;
+                    let raw_dy = (cy - center_y) / scale;
                     let dist = (raw_dx * raw_dx + raw_dy * raw_dy).sqrt().max(1.0);
                     let dx = (raw_dx / dist * 3.0).clamp(-3.0, 3.0);
                     let dy = (raw_dy / dist * 3.0).clamp(-3.0, 3.0);

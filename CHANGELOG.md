@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.1.5 — HiDPI Fix & Hit Region Precision
+
+### New Features
+
+- **Per-pose hit regions** (PR [#10](https://github.com/QingJ01/Clyde/pull/10) by [@0xC3B6](https://github.com/0xC3B6)) — Hit area now follows the pet's silhouette per animation pose (Standing, WorkingWide, Sleeping, Mini), replacing the single oversized rectangle. Reduces misclicks on transparent areas around the pet
+- **Hit region transparency** — Hit window background is now fully transparent; macOS uses minimal alpha (`1/255`) only on hit zones to receive pointer events, eliminating the faint overlay visible on some displays
+
+### Bug Fixes
+
+- **Bubble windows positioned off-screen on HiDPI** — `measured_height` from frontend was in logical (CSS) pixels but positioning math used physical pixels. On 2× displays, bubbles were placed at half the intended distance from the pet, causing overlap or off-screen placement. All bubble positioning now consistently uses physical pixels with proper DPI conversion
+- **Drag jump to top-left corner** (PR [#10](https://github.com/QingJ01/Clyde/pull/10)) — `drag_start` captured window position in logical coords while `drag_move` received physical from `toPhys()`. Now captures DPI scale at drag start and converts consistently to physical throughout the drag lifecycle
+- **Snap tolerance shrank on HiDPI** — `SNAP_TOLERANCE` (30px) and `PEEK_OFFSET` (25px) were compared against physical-pixel coordinates without scaling. On 2× displays, snap zone was only 15 logical px. Now scaled by DPI factor
+- **Drag clamp too permissive on HiDPI** — `MIN_VISIBLE` (30px) and `STARTUP_MIN_VISIBLE` (120px) were used as physical pixels. On 2× displays, only 15/60 logical pixels of the pet needed to remain visible. Now scaled by DPI factor
+- **Position restore heuristic DPI-sensitive** — Thresholds (36px near-edge, 80px far-from-saved) in `should_restore_saved_single_monitor_position` were compared against physical coordinates. Now scaled by DPI
+- **Eye tracking sluggish on HiDPI** — Cursor-to-pet distance was computed in physical pixels, making the normalization DPI-dependent. On 2× displays, `dist` was ~2× larger, suppressing eye movement. Now normalizes to logical space before directional calculation
+- **Peek detection margin unscaled** — The 10px hover margin around the pet in mini mode was in physical pixels. On 2× displays, detection zone was only 5 logical px. Now scaled by DPI
+- **Bubble initial size mismatch** — `inner_size` used 320px placeholder but `measured_height` used 200px, causing brief stacking glitch before real measurement arrived. Aligned to 200px
+
+### Internal
+
+- `windows::pet_scale_factor(app)` — new shared DPI utility, replacing duplicated `get_scale` in `permission.rs`
+- `hit_regions.rs` — new module defining relative hit rectangles per animation profile
+- `sync_hit` called on every state change to keep hit regions in sync with current pose
+- Frontend `toPhys()` removed; Rust handles logical→physical conversion via captured `drag_scale_factor`
+
+---
+
 ## v0.1.4 — Tray Hide, Permission Queue & Click-Through Fix
 
 ### New Features

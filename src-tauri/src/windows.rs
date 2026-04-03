@@ -139,6 +139,14 @@ pub fn monitor_key(monitor: &Monitor) -> String {
     format!("{}:{}:{}:{}", pos.x, pos.y, size.width, size.height)
 }
 
+/// DPI scale factor for the pet window (physical / logical).
+/// Falls back to 1.0 if the pet window is unavailable.
+pub fn pet_scale_factor(app: &AppHandle) -> f64 {
+    app.get_webview_window("pet")
+        .and_then(|p| p.scale_factor().ok())
+        .unwrap_or(1.0)
+}
+
 pub fn monitor_area(monitor: &Monitor) -> MonitorArea {
     let pos = monitor.position();
     let size = monitor.size();

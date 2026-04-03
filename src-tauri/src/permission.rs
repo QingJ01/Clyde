@@ -71,7 +71,7 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
 
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("")
-        .inner_size(BUBBLE_WIDTH as f64, 320.0)
+        .inner_size(BUBBLE_WIDTH as f64, 200.0)
         .position(x_log, y_log)
         .decorations(false)
         .always_on_top(true)
@@ -93,11 +93,12 @@ pub fn show_bubble(app: &AppHandle, bubbles: &BubbleMap, data: BubbleData) -> bo
             crate::macos_spaces::apply_space_follow(&window);
             let _ = window.set_shadow(false);
             let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
+            let phys_placeholder = (200.0 * scale).round() as u32;
             bubbles.lock_or_recover().insert(
                 id,
                 BubbleEntry {
                     data,
-                    measured_height: 200,
+                    measured_height: phys_placeholder,
                 },
             );
             reposition_bubbles(app, bubbles);
@@ -157,8 +158,8 @@ pub fn close_mode_notice_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
 }
 
 /// All bubble positioning uses **physical pixels** (matching get_pet_bounds,
-/// PhysicalPosition, etc.). Design constants (BUBBLE_WIDTH, BUBBLE_MARGIN)
-/// are scaled by DPI at use sites.
+/// PhysicalPosition, etc.). `measured_height` is stored in physical pixels
+/// (converted from logical on receipt). Design constants are scaled by DPI.
 pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
     let mut entries: Vec<(String, u32)> = bubbles
         .lock_or_recover()
@@ -170,17 +171,21 @@ pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
         return;
     }
 
+    let scale = get_scale(app);
+    let margin = (BUBBLE_MARGIN as f64 * scale).round() as i32;
+    let gap = (BUBBLE_GAP as f64 * scale).round() as i32;
+
     let monitor = get_work_area(app);
     let anchor = get_pet_anchor(app, &monitor);
 
-    // Total height needed for all bubbles
-    let total_h: u32 = entries.iter().map(|(_, h)| h + BUBBLE_GAP).sum::<u32>();
+    // Total height needed for all bubbles (measured_height is already physical)
+    let total_h: i32 = entries.iter().map(|(_, h)| *h as i32 + gap).sum();
 
-    let space_above = (anchor.y - monitor.y).max(0) as u32;
+    let space_above = (anchor.y - monitor.y).max(0);
     let space_below =
-        (monitor.y + monitor.height as i32 - (anchor.y + anchor.height as i32)).max(0) as u32;
+        (monitor.y + monitor.height as i32 - (anchor.y + anchor.height as i32)).max(0);
     let stack_above =
-        space_above >= total_h + BUBBLE_MARGIN || (space_above >= space_below && space_above > 0);
+        space_above >= total_h + margin || (space_above >= space_below && space_above > 0);
 
     if stack_above {
         // Stack upward from pet's top edge
@@ -188,36 +193,39 @@ pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
         for (id, height) in &entries {
             let label = format!("bubble-{id}");
             if let Some(win) = app.get_webview_window(&label) {
-                let x = center_bubble_x(anchor.x, anchor.width, &monitor);
-                let desired_y = y_bottom - *height as i32 - BUBBLE_GAP as i32;
-                let y = desired_y.max(monitor.y + BUBBLE_MARGIN as i32);
+                let x = center_bubble_x(anchor.x, anchor.width, &monitor, scale);
+                let desired_y = y_bottom - *height as i32 - gap;
+                let y = desired_y.max(monitor.y + margin);
                 let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
                 y_bottom = y;
             }
         }
     } else {
         // Stack downward from pet's bottom edge
-        let mut y_top = anchor.y + anchor.height as i32 + BUBBLE_GAP as i32;
+        let mut y_top = anchor.y + anchor.height as i32 + gap;
         for (id, height) in &entries {
             let label = format!("bubble-{id}");
             if let Some(win) = app.get_webview_window(&label) {
-                let x = center_bubble_x(anchor.x, anchor.width, &monitor);
+                let x = center_bubble_x(anchor.x, anchor.width, &monitor, scale);
                 let max_y =
-                    monitor.y + monitor.height as i32 - *height as i32 - BUBBLE_MARGIN as i32;
-                let y = y_top.min(max_y.max(monitor.y + BUBBLE_MARGIN as i32));
+                    monitor.y + monitor.height as i32 - *height as i32 - margin;
+                let y = y_top.min(max_y.max(monitor.y + margin));
                 let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-                y_top = y + *height as i32 + BUBBLE_GAP as i32;
+                y_top = y + *height as i32 + gap;
             }
         }
     }
 }
 
 /// Calculate X position: center bubble relative to pet, clamped to screen.
-fn center_bubble_x(pet_x: i32, pet_width: u32, monitor: &crate::windows::MonitorArea) -> i32 {
+/// All coordinates are physical pixels; `scale` is the DPI factor.
+fn center_bubble_x(pet_x: i32, pet_width: u32, monitor: &crate::windows::MonitorArea, scale: f64) -> i32 {
+    let bw = (BUBBLE_WIDTH as f64 * scale).round() as i32;
+    let margin = (BUBBLE_MARGIN as f64 * scale).round() as i32;
     let center = pet_x + pet_width as i32 / 2;
-    let x = center - BUBBLE_WIDTH as i32 / 2;
-    let min_x = monitor.x + BUBBLE_MARGIN as i32;
-    let max_x = monitor.x + monitor.width as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32;
+    let x = center - bw / 2;
+    let min_x = monitor.x + margin;
+    let max_x = monitor.x + monitor.width as i32 - bw - margin;
     x.max(min_x).min(max_x.max(min_x))
 }
 
@@ -255,12 +263,16 @@ pub fn bubble_position_for_index(
 }
 
 fn initial_bubble_position(app: &AppHandle, bubbles: &BubbleMap) -> (i32, i32) {
+    let scale = get_scale(app);
+    let margin = (BUBBLE_MARGIN as f64 * scale).round() as i32;
+    let gap = (BUBBLE_GAP as f64 * scale).round() as i32;
+    let placeholder_h = (200.0 * scale).round() as i32;
     let monitor = get_work_area(app);
     let anchor = get_pet_anchor(app, &monitor);
     let count = bubbles.lock_or_recover().len() as u32;
-    let x = center_bubble_x(anchor.x, anchor.width, &monitor);
-    let min_y = monitor.y + BUBBLE_MARGIN as i32;
-    let y = (anchor.y - (count as i32 + 1) * (200 + BUBBLE_GAP as i32)).max(min_y);
+    let x = center_bubble_x(anchor.x, anchor.width, &monitor, scale);
+    let min_y = monitor.y + margin;
+    let y = (anchor.y - (count as i32 + 1) * (placeholder_h + gap)).max(min_y);
     (x, y)
 }
 
@@ -292,9 +304,7 @@ fn get_work_area(app: &AppHandle) -> crate::windows::MonitorArea {
 }
 
 fn get_scale(app: &AppHandle) -> f64 {
-    app.get_webview_window("pet")
-        .and_then(|p| p.scale_factor().ok())
-        .unwrap_or(1.0)
+    crate::windows::pet_scale_factor(app)
 }
 
 #[tauri::command]
@@ -309,9 +319,14 @@ pub fn bubble_height_measured(
     id: String,
     height: u32,
 ) {
+    // height from frontend is in logical (CSS) pixels; convert to physical for
+    // consistent positioning math in reposition_bubbles.
+    let scale = get_scale(&app);
+    let phys_height = (height as f64 * scale).round() as u32;
     if let Some(entry) = bubbles.lock_or_recover().get_mut(&id) {
-        entry.measured_height = height;
+        entry.measured_height = phys_height;
     }
+    // set_size takes logical pixels — use the original height
     if let Some(window) = app.get_webview_window(&format!("bubble-{id}")) {
         let _ = window.set_size(Size::Logical(LogicalSize::new(
             BUBBLE_WIDTH as f64,
@@ -368,7 +383,8 @@ mod tests {
             height: 1080,
         };
 
-        let x = center_bubble_x(2800, 360, &monitor);
+        let scale = 1.0;
+        let x = center_bubble_x(2800, 360, &monitor, scale);
         assert!(x >= monitor.x + BUBBLE_MARGIN as i32);
         assert!(x <= monitor.x + monitor.width as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32);
     }
@@ -383,8 +399,28 @@ mod tests {
             height: 1117,
         };
 
-        let x = center_bubble_x(-1500, 360, &monitor);
+        let scale = 1.0;
+        let x = center_bubble_x(-1500, 360, &monitor, scale);
         assert!(x >= monitor.x + BUBBLE_MARGIN as i32);
         assert!(x <= monitor.x + monitor.width as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32);
+    }
+
+    #[test]
+    fn test_center_bubble_x_hidpi() {
+        // On a 2x HiDPI display, physical coordinates are doubled
+        let monitor = crate::windows::MonitorArea {
+            key: "retina".into(),
+            x: 0,
+            y: 0,
+            width: 3840, // 1920 logical * 2
+            height: 2160,
+        };
+
+        let scale = 2.0;
+        let bw_phys = (BUBBLE_WIDTH as f64 * scale).round() as i32; // 680
+        let margin_phys = (BUBBLE_MARGIN as f64 * scale).round() as i32; // 16
+        let x = center_bubble_x(1800, 400, &monitor, scale);
+        assert!(x >= monitor.x + margin_phys);
+        assert!(x <= monitor.x + monitor.width as i32 - bw_phys - margin_phys);
     }
 }

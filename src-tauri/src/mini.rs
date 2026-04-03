@@ -6,10 +6,20 @@ use crate::{emit_state, sync_hit};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, PhysicalPosition};
 
-pub const SNAP_TOLERANCE: i32 = 30;
-#[allow(dead_code)]
-pub const PEEK_OFFSET: i32 = 25;
+/// Logical-pixel constants — must be scaled by DPI before use in physical coords.
+const SNAP_TOLERANCE_LP: f64 = 30.0;
+const PEEK_OFFSET_LP: f64 = 25.0;
 pub const MINI_OFFSET_RATIO: f64 = 0.486;
+
+/// Snap tolerance in physical pixels for the current DPI.
+pub fn snap_tolerance(app: &AppHandle) -> i32 {
+    (SNAP_TOLERANCE_LP * windows::pet_scale_factor(app)).round() as i32
+}
+
+/// Peek offset in physical pixels for the current DPI.
+fn peek_offset(app: &AppHandle) -> i32 {
+    (PEEK_OFFSET_LP * windows::pet_scale_factor(app)).round() as i32
+}
 
 /// Which screen edge the pet is snapping to.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -25,17 +35,18 @@ pub fn should_snap_to_edge(app: &AppHandle) -> Option<EdgeSnap> {
 
 pub fn edge_snap_for_bounds(app: &AppHandle, bounds: &WindowBounds) -> Option<EdgeSnap> {
     let monitor = windows::monitor_for_bounds(app, bounds)?;
+    let tolerance = snap_tolerance(app);
     let screen_left = monitor.x;
     let screen_right = monitor.x + monitor.width as i32;
     let pet_right = bounds.x + bounds.width as i32;
 
-    if screen_right - pet_right <= SNAP_TOLERANCE {
+    if screen_right - pet_right <= tolerance {
         Some(EdgeSnap {
             monitor,
             width: bounds.width,
             side: SnapSide::Right,
         })
-    } else if bounds.x - screen_left <= SNAP_TOLERANCE {
+    } else if bounds.x - screen_left <= tolerance {
         Some(EdgeSnap {
             monitor,
             width: bounds.width,
@@ -257,9 +268,10 @@ pub fn animate_parabola(
 /// Peek in: slide to peek position (absolute, not relative — prevents drift)
 pub fn peek_in(app: &AppHandle) {
     if let Some(snap) = should_snap_to_edge(app) {
+        let offset = peek_offset(app);
         let target_x = match snap.side {
-            SnapSide::Right => snap.hidden_x() - PEEK_OFFSET,
-            SnapSide::Left => snap.hidden_x() + PEEK_OFFSET,
+            SnapSide::Right => snap.hidden_x() - offset,
+            SnapSide::Left => snap.hidden_x() + offset,
         };
         animate_to_x(app, target_x, 200);
     }
