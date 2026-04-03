@@ -35,26 +35,41 @@ const SNAP_TOLERANCE_LP: f64 = 30.0;
 const PEEK_OFFSET_LP: f64 = 25.0;
 pub const MINI_OFFSET_RATIO: f64 = 0.486;
 
-/// Check if peek detection is currently suppressed (during entry animation).
+/// Sentinel value: suppress peek until mouse exits the pet vicinity.
+const PEEK_WAIT_FOR_EXIT: u64 = u64::MAX;
+
+/// Check if peek detection is currently suppressed.
+/// Returns `true` if suppression is active (time-based or waiting for mouse exit).
 pub fn is_peek_suppressed(app: &AppHandle) -> bool {
     app.try_state::<PeekSuppressDeadline>()
         .map(|d| {
+            let deadline = d.load();
+            if deadline == PEEK_WAIT_FOR_EXIT {
+                return true;
+            }
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            now < d.load()
+            now < deadline
         })
         .unwrap_or(false)
 }
 
-fn suppress_peek_for(app: &AppHandle, ms: u64) {
+/// Called by the tick loop when mouse is NOT near the pet and suppression is
+/// in "wait for exit" mode — clears the suppression so peek can trigger on
+/// the next approach.
+pub fn clear_peek_suppression_if_mouse_away(app: &AppHandle) {
     if let Some(d) = app.try_state::<PeekSuppressDeadline>() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        d.store(now + ms);
+        if d.load() == PEEK_WAIT_FOR_EXIT {
+            d.store(0);
+        }
+    }
+}
+
+fn suppress_peek_until_mouse_exit(app: &AppHandle) {
+    if let Some(d) = app.try_state::<PeekSuppressDeadline>() {
+        d.store(PEEK_WAIT_FOR_EXIT);
     }
 }
 
@@ -273,9 +288,10 @@ pub fn do_enter_mini(app: &AppHandle) -> bool {
     }
 
     emit_state(app, "mini-idle", "clyde-mini-enter.svg");
-    // Suppress peek detection for the entry animation duration so peek_in
-    // doesn't hijack the animation and leave the pet away from the edge.
-    suppress_peek_for(app, 400);
+    // Suppress peek until the mouse leaves the pet vicinity. Without this,
+    // the mouse (still at the drag-release position) triggers peek_in right
+    // after the entry animation, pulling the pet 25px away from the edge.
+    suppress_peek_until_mouse_exit(app);
     // animate_to_x automatically syncs hit window when animation completes
     animate_to_x(app, hidden_x, 300);
     true
