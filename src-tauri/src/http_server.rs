@@ -571,6 +571,10 @@ async fn post_permission(
         elicitation_server_name: None,
         mode_label: None,
         mode_description: None,
+        update_version: None,
+        update_url: None,
+        update_notes: None,
+        update_lang: None,
     };
     let response = match queue_request_and_wait(&ctx, bubble_data).await {
         HookDecision::Permission(decision) => perm_response(&decision),
@@ -640,6 +644,10 @@ async fn post_elicitation(
         elicitation_server_name,
         mode_label: None,
         mode_description: None,
+        update_version: None,
+        update_url: None,
+        update_notes: None,
+        update_lang: None,
     };
 
     let response = match queue_request_and_wait(&ctx, bubble_data).await {

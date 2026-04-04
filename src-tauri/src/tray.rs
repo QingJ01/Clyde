@@ -200,6 +200,8 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
     };
     let autostart = MenuItem::with_id(app, "autostart", autostart_label, true, None::<&str>)?;
 
+    let check_updates_item = MenuItem::with_id(app, "check-for-updates", t("checkForUpdates", lang), true, None::<&str>)?;
+
     Menu::with_items(
         app,
         &[
@@ -215,6 +217,7 @@ fn build_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
             &permission_wait_sub,
             &lang_sub,
             &autostart,
+            &check_updates_item,
             &quit,
         ],
     )
@@ -387,6 +390,9 @@ fn handle_tray_event(app: &AppHandle, id: &str) {
         "lang-en" | "lang-zh" => {
             let lang = if id == "lang-zh" { "zh" } else { "en" };
             apply_lang(app, lang);
+        }
+        "check-for-updates" => {
+            crate::update_check::trigger_manual_check(app);
         }
         _ => {}
     }

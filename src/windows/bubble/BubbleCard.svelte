@@ -54,6 +54,10 @@
     elicitationServerName = '',
     modeLabel = '',
     modeDescription = '',
+    updateVersion = '',
+    updateUrl = '',
+    updateNotes = '',
+    updateLang = 'en',
   }: {
     id: string;
     windowKind?: string;
@@ -73,11 +77,16 @@
     elicitationServerName?: string;
     modeLabel?: string;
     modeDescription?: string;
+    updateVersion?: string;
+    updateUrl?: string;
+    updateNotes?: string;
+    updateLang?: string;
   } = $props();
 
   let elicitationValues = $state<Record<string, unknown>>({});
 
   const isModeNotice = $derived(windowKind === 'ModeNotice');
+  const isUpdateNotice = $derived(windowKind === 'UpdateNotice');
   const commandText = $derived(extractCommand(toolInput));
   const headerMeta = $derived([sessionProject, sessionShortId].filter(Boolean).join(' · '));
   const shellName = $derived(detectShell(toolInput, toolName));
@@ -430,13 +439,49 @@
     window.open(elicitationUrl, '_blank', 'noopener,noreferrer');
   }
 
+  async function openUpdate() {
+    await invoke('open_update_url', { url: updateUrl });
+  }
+
+  async function dismissUpdate() {
+    await invoke('dismiss_update_version', { version: updateVersion });
+  }
+
   async function dismiss() {
     // Mode notice: close bubble via Rust to properly clean up BubbleMap
     await invoke('dismiss_bubble', { id });
   }
 </script>
 
-{#if isModeNotice}
+{#if isUpdateNotice}
+  <div class="bubble">
+    <div class="glow glow-update"></div>
+    <div class="header">
+      <div class="header-copy">
+        <span class="eyebrow">Clyde</span>
+        <span class="title">
+          {updateLang === 'zh' ? '发现新版本' : 'Update Available'}
+        </span>
+      </div>
+      <span class="badge badge-update">v{updateVersion}</span>
+    </div>
+
+    {#if updateNotes}
+      <div class="code-block mode-block update-notes">
+        <pre>{updateNotes}</pre>
+      </div>
+    {/if}
+
+    <div class="actions">
+      <button class="btn btn-primary" onclick={openUpdate} aria-label="Download update">
+        {updateLang === 'zh' ? '前往下载' : 'Download'}
+      </button>
+      <button class="btn btn-secondary" onclick={dismissUpdate} aria-label="Dismiss update">
+        {updateLang === 'zh' ? '跳过此版本' : 'Skip'}
+      </button>
+    </div>
+  </div>
+{:else if isModeNotice}
   <div class="bubble">
     <div class="glow glow-mode"></div>
     <div class="header">
@@ -726,6 +771,10 @@
     background: radial-gradient(circle, rgba(106, 155, 232, 0.24), rgba(106, 155, 232, 0) 72%);
   }
 
+  .glow-update {
+    background: radial-gradient(circle, rgba(130, 210, 140, 0.24), rgba(130, 210, 140, 0) 72%);
+  }
+
   .header {
     display: flex;
     align-items: flex-start;
@@ -799,6 +848,17 @@
     background: rgba(106, 155, 232, 0.14);
     color: #93bcff;
     border-color: rgba(106, 155, 232, 0.16);
+  }
+
+  .badge-update {
+    background: rgba(130, 210, 140, 0.14);
+    color: #8fd99a;
+    border-color: rgba(130, 210, 140, 0.16);
+  }
+
+  .update-notes {
+    max-height: 120px;
+    overflow-y: auto;
   }
 
   .section-label {

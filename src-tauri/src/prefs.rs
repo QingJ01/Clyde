@@ -54,6 +54,12 @@ pub struct Prefs {
     pub permission_decision_window_secs: u16,
     #[serde(default)]
     pub monitor_positions: HashMap<String, MonitorPlacement>,
+    #[serde(default = "default_true")]
+    pub check_for_updates: bool,
+    #[serde(default)]
+    pub last_update_check_epoch: u64,
+    #[serde(default)]
+    pub dismissed_update_version: String,
 }
 
 /// Default screen size fallback when monitor info is unavailable.
@@ -121,6 +127,9 @@ impl Default for Prefs {
             auto_dnd_meetings: false,
             permission_decision_window_secs: default_permission_decision_window_secs(),
             monitor_positions: HashMap::new(),
+            check_for_updates: true,
+            last_update_check_epoch: 0,
+            dismissed_update_version: String::new(),
         }
     }
 }

@@ -15,6 +15,7 @@ mod session_meta;
 mod state_machine;
 mod tick;
 mod tray;
+mod update_check;
 mod util;
 mod windows;
 
@@ -1492,6 +1493,29 @@ fn set_lang(app: AppHandle, lang: String, prefs: tauri::State<SharedPrefs>) {
     tray::rebuild_menu(&app, &lang);
 }
 
+#[tauri::command]
+fn open_update_url(app: AppHandle, url: String) {
+    let _ = tauri::async_runtime::spawn(async move {
+        let _ = open::that(&url);
+    });
+    // Dismiss the update bubble
+    if let Some(bubbles) = app.try_state::<permission::BubbleMap>() {
+        permission::close_bubble(&app, &bubbles, "update-check");
+    }
+}
+
+#[tauri::command]
+fn dismiss_update_version(app: AppHandle, version: String) {
+    if let Some(prefs_state) = app.try_state::<SharedPrefs>() {
+        let mut p = prefs_state.lock_or_recover();
+        p.dismissed_update_version = version;
+        prefs::save(&app, &p);
+    }
+    if let Some(bubbles) = app.try_state::<permission::BubbleMap>() {
+        permission::close_bubble(&app, &bubbles, "update-check");
+    }
+}
+
 fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
     // Session focus — support both "ctx-session-X" (tray) and "session-X" (custom menu)
     let session_id = id
@@ -1824,6 +1848,8 @@ pub fn run() {
             permission::bubble_height_measured,
             permission::dismiss_bubble,
             focus::focus_terminal_for_session,
+            open_update_url,
+            dismiss_update_version,
         ])
         .setup(move |app| {
             let prefs = prefs::load(app.handle());
@@ -1934,6 +1960,7 @@ pub fn run() {
             claude_monitor::start_claude_monitor(app.handle().clone(), shared_state.clone());
             start_cleanup_loop(app.handle(), shared_state.clone());
             environment::start_environment_loop(app.handle(), shared_state.clone());
+            update_check::start_update_check_loop(app.handle().clone());
 
             Ok(())
         })

@@ -24,6 +24,11 @@ pub fn t(key: &str, lang: &str) -> String {
         ("clickThrough", "zh") => "点击穿透".into(),
         ("hideOnFullscreen", "zh") => "全屏时自动隐藏".into(),
         ("autoDndMeetings", "zh") => "会议/共享时自动勿扰".into(),
+        ("checkForUpdates", "zh") => "检查更新".into(),
+        ("upToDate", "zh") => "已是最新版本".into(),
+        ("upToDateDesc", "zh") => "当前版本已经是最新的了".into(),
+        ("checkFailed", "zh") => "检查更新失败".into(),
+        ("restoreInteraction", "zh") => "恢复交互".into(),
         // English (default)
         ("sessionWorking", _) => "Working".into(),
         ("sessionThinking", _) => "Thinking".into(),
@@ -49,6 +54,11 @@ pub fn t(key: &str, lang: &str) -> String {
         ("clickThrough", _) => "Click Through".into(),
         ("hideOnFullscreen", _) => "Hide on Fullscreen".into(),
         ("autoDndMeetings", _) => "Auto DND During Meetings".into(),
+        ("checkForUpdates", _) => "Check for Updates".into(),
+        ("upToDate", _) => "Already Up to Date".into(),
+        ("upToDateDesc", _) => "You are running the latest version".into(),
+        ("checkFailed", _) => "Update check failed".into(),
+        ("restoreInteraction", _) => "Restore Interaction".into(),
         _ => key.to_string(),
     }
 }

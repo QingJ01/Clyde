@@ -198,6 +198,10 @@ fn trigger_mode_notice(app: &AppHandle, _session_id: &str, mode: &PermissionMode
         elicitation_server_name: None,
         mode_label: Some(format!("{} {}", mode.icon(), mode.label(lang))),
         mode_description: Some(mode.description(lang).to_string()),
+        update_version: None,
+        update_url: None,
+        update_notes: None,
+        update_lang: None,
     };
 
     if let Some(bubbles) = app.try_state::<crate::permission::BubbleMap>() {

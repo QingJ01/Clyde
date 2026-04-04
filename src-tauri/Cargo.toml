@@ -22,6 +22,7 @@ uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
 dirs = "5"
 open = "5"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 
 [target.'cfg(windows)'.dependencies]

@@ -12,6 +12,7 @@ pub type BubbleMap = Arc<Mutex<HashMap<String, BubbleEntry>>>;
 pub enum WindowKind {
     ApprovalRequest,
     ModeNotice,
+    UpdateNotice,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +36,11 @@ pub struct BubbleData {
     // mode_notice fields
     pub mode_label: Option<String>,
     pub mode_description: Option<String>,
+    // update_notice fields
+    pub update_version: Option<String>,
+    pub update_url: Option<String>,
+    pub update_notes: Option<String>,
+    pub update_lang: Option<String>,
 }
 
 pub struct BubbleEntry {

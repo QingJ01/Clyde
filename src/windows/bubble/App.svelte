@@ -58,6 +58,10 @@
       elicitationServerName={bubbleData.elicitation_server_name ?? ''}
       modeLabel={bubbleData.mode_label ?? ''}
       modeDescription={bubbleData.mode_description ?? ''}
+      updateVersion={bubbleData.update_version ?? ''}
+      updateUrl={bubbleData.update_url ?? ''}
+      updateNotes={bubbleData.update_notes ?? ''}
+      updateLang={bubbleData.update_lang ?? 'en'}
     />
   {:else}
     <div class="loading">Loading...</div>
