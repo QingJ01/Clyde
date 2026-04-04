@@ -18,7 +18,6 @@ pub struct RelativeHitRect {
 
 #[derive(Debug, Clone)]
 pub struct HitProfile {
-    pub key: HitProfileKey,
     pub rects: &'static [RelativeHitRect],
 }
 
@@ -122,7 +121,7 @@ pub fn profile(key: HitProfileKey) -> HitProfile {
         HitProfileKey::Mini => MINI_RECTS,
     };
 
-    HitProfile { key, rects }
+    HitProfile { rects }
 }
 
 #[cfg(test)]

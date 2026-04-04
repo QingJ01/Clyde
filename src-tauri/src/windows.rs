@@ -67,8 +67,7 @@ impl HitBox {
         w: 17,
         h: 12,
     };
-    // A generous interaction area so dragging works across the full pet,
-    // not just the sprite's narrow torso hotspot.
+    #[allow(dead_code)]
     pub const INTERACTIVE: HitBox = HitBox {
         x: -10,
         y: -16,
@@ -109,6 +108,7 @@ pub fn compute_hit_rect(bounds: &WindowBounds, hb: &HitBox) -> HitRect {
     }
 }
 
+#[cfg(test)]
 fn interactive_rect(bounds: &WindowBounds) -> HitRect {
     HitRect {
         left: bounds.x as f64,
@@ -118,6 +118,7 @@ fn interactive_rect(bounds: &WindowBounds) -> HitRect {
     }
 }
 
+#[cfg(test)]
 fn sync_rect_for_hitbox(bounds: &WindowBounds, hb: &HitBox) -> HitRect {
     if hb.x == HitBox::INTERACTIVE.x
         && hb.y == HitBox::INTERACTIVE.y
