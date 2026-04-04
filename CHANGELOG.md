@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.1.6 — Update Check & Mini Mode Fix
+
+### New Features
+
+- **GitHub release update check** — Automatic check every 4 hours with bubble notification when a new version is available. "Download" opens the release page; "Skip" dismisses that version. Tray menu "Check for Updates" triggers an immediate manual check with feedback ("Already Up to Date" or error)
+- **Update bubble UI** — Green-themed glassmorphism bubble with version badge and release notes preview
+
+### Bug Fixes
+
+- **Mini mode pet couldn't reach screen edge** — Peek detection fired during entry animation, cancelling it via AnimationGeneration. Fixed with PeekSuppressDeadline that waits until mouse exits vicinity
+- **Mini mode pet bounced back out** — `reconcile_pet_geometry` fired on `WindowEvent::Moved` during animation, clamping pet to 120px visible (more than mini's 97px). Now skips reconcile when `mini_mode=true`
+- **Mini mode peek oscillation** — Replaced simple cooldown with 3-phase state machine (Hidden → Peeking → Retracting) to prevent rapid peek/retract cycles
+- **Tauri state collision** — Both `AnimationGeneration` and `PeekSuppressDeadline` were `Arc<AtomicU64>`, causing Tauri panic. Fixed with newtype wrapper
+- **Fast-flick drag drops** — Added Pointer Capture (`setPointerCapture`) on hit window for reliable drag events
+
+### Internal
+
+- `update_check.rs` — new module: reqwest + rustls-tls for GitHub API, semver comparison, auto/manual check with bubble feedback
+- `PeekSuppressDeadline` — newtype wrapper with `u64::MAX` sentinel for "wait until mouse exits"
+- `PeekPhase` enum — Hidden/Peeking/Retracting state machine replacing simple boolean
+- Near detection uses visible bounds (clamped to monitor) instead of full window bounds
+
+---
+
 ## v0.1.5 — HiDPI Fix & Hit Region Precision
 
 ### New Features
