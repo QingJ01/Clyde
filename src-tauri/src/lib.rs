@@ -1287,6 +1287,12 @@ fn reconcile_pet_geometry(app: &AppHandle) {
         return;
     };
     let prefs_snapshot = prefs_state.lock_or_recover().clone();
+    // In mini mode the pet is intentionally partially off-screen.
+    // Skip geometry reconciliation or it fights the hidden position.
+    if prefs_snapshot.mini_mode {
+        sync_hit(app);
+        return;
+    }
     let mut target = preferred_bounds_for_current_display(app, &prefs_snapshot);
 
     if let Some(current_bounds) = windows::get_pet_bounds(app) {
