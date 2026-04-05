@@ -19,10 +19,11 @@
         "decorations": false,
         "transparent": true,
         "shadow": false,
-        "alwaysOnTop": true,
+        "alwaysOnTop": false,
         "skipTaskbar": true,
         "resizable": false,
         "visible": false,
+        "visibleOnAllWorkspaces": true,
         "url": "src/windows/pet/index.html"
       },
       {
@@ -33,10 +34,11 @@
         "decorations": false,
         "transparent": true,
         "shadow": false,
-        "alwaysOnTop": true,
+        "alwaysOnTop": false,
         "skipTaskbar": true,
         "resizable": false,
         "visible": false,
+        "visibleOnAllWorkspaces": true,
         "url": "src/windows/hit/index.html"
       }
     ]

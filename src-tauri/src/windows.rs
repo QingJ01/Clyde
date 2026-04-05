@@ -166,6 +166,32 @@ pub fn available_monitor_areas(app: &AppHandle) -> Option<Vec<MonitorArea>> {
     )
 }
 
+/// Returns a single `MonitorArea` that is the bounding box of all connected
+/// monitors.  This allows the pet to be dragged freely across displays.
+pub fn union_of_all_monitors(app: &AppHandle) -> Option<MonitorArea> {
+    let monitors = available_monitor_areas(app)?;
+    if monitors.is_empty() {
+        return None;
+    }
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+    for m in &monitors {
+        min_x = min_x.min(m.x);
+        min_y = min_y.min(m.y);
+        max_x = max_x.max(m.x + m.width as i32);
+        max_y = max_y.max(m.y + m.height as i32);
+    }
+    Some(MonitorArea {
+        key: String::from("union"),
+        x: min_x,
+        y: min_y,
+        width: (max_x - min_x) as u32,
+        height: (max_y - min_y) as u32,
+    })
+}
+
 pub fn current_monitor_for_pet(app: &AppHandle) -> Option<MonitorArea> {
     if let Some(pet) = app.get_webview_window("pet") {
         if let Ok(Some(monitor)) = pet.current_monitor() {

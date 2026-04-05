@@ -378,11 +378,15 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
         height: pet_h,
     };
 
-    // Clamp to screen bounds: keep at least 30px of the pet visible
-    if let Some(monitor) = windows::monitor_for_bounds(&app, &probe_bounds)
+    // Clamp to the union of all monitors so the pet can be dragged across displays
+    // but still keeps at least 30px visible on some screen.
+    const MIN_VISIBLE: i32 = 30;
+    if let Some(union_rect) = windows::union_of_all_monitors(&app) {
+        (new_x, new_y) =
+            windows::clamp_window_to_monitor(new_x, new_y, pet_w, pet_h, &union_rect, MIN_VISIBLE);
+    } else if let Some(monitor) = windows::monitor_for_bounds(&app, &probe_bounds)
         .or_else(|| windows::current_monitor_for_pet(&app))
     {
-        const MIN_VISIBLE: i32 = 30;
         (new_x, new_y) =
             windows::clamp_window_to_monitor(new_x, new_y, pet_w, pet_h, &monitor, MIN_VISIBLE);
     }
@@ -1554,6 +1558,9 @@ fn setup_pet_window(app: &AppHandle, prefs: &prefs::Prefs) -> Option<windows::Wi
     if let Err(e) = pet.show() {
         eprintln!("Clyde: pet.show() failed: {e}");
     }
+    // Re-apply overlay properties after show() to ensure they take effect in
+    // release builds (Tauri may reset native window state during show).
+    macos_spaces::apply_space_follow(&pet);
     emit_pet_config(app, prefs);
     println!(
         "Clyde: pet window shown ({}x{}) at ({},{})",
@@ -1587,6 +1594,10 @@ fn setup_hit_window(app: &AppHandle, initial_bounds: Option<&windows::WindowBoun
         macos_spaces::apply_space_follow(&hit);
     }
     windows::show_hit_window(app);
+    // Re-apply after show() for release build safety.
+    if let Some(hit) = app.get_webview_window("hit") {
+        macos_spaces::apply_space_follow(&hit);
+    }
     let click_through = app
         .try_state::<SharedPrefs>()
         .map(|prefs| {
