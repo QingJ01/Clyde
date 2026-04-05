@@ -1722,6 +1722,10 @@ pub fn run() {
             focus::focus_terminal_for_session,
         ])
         .setup(move |app| {
+            // Hide Dock icon — the app is controlled via the tray icon instead.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let prefs = prefs::load(app.handle());
             *shared_prefs.lock_or_recover() = prefs.clone();
             sync_autostart_pref(prefs.auto_start_with_claude);
