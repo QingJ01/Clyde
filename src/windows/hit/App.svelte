@@ -33,6 +33,10 @@
     startY = toPhys(e.screenY);
     if (positionLocked) return;
 
+    // Capture pointer so we keep receiving events even when the cursor
+    // leaves the hit window (e.g. fast cross-monitor drags).
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+
     invoke('drag_start', { x: startX, y: startY });
 
     clickCount++;
@@ -72,6 +76,7 @@
   function onPointerUp(e: PointerEvent) {
     if (!pointerActive) return;
     if (activePointerId !== null && e.pointerId !== activePointerId) return;
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
     pointerActive = false;
     activePointerId = null;
     snapSide = null;
@@ -81,8 +86,9 @@
     }
   }
 
-  function onPointerCancel() {
+  function onPointerCancel(e: PointerEvent) {
     if (!pointerActive) return;
+    try { (e.target as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
     pointerActive = false;
     activePointerId = null;
     snapSide = null;

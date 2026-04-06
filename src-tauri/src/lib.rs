@@ -303,17 +303,34 @@ pub(crate) fn toggle_auto_dnd_meetings_pref(app: &AppHandle) {
 }
 
 
+/// Returns the global mouse cursor position using CoreGraphics (macOS) or
+/// falls back to the frontend-supplied coordinates on other platforms.
+/// CG coordinates use a top-left origin that is DPI-independent, avoiding
+/// the scale-factor mismatch that occurs when dragging across monitors with
+/// different DPI settings.
+#[cfg(target_os = "macos")]
+fn native_cursor_position() -> Option<(f64, f64)> {
+    use core_graphics::event::CGEvent;
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
+    let event = CGEvent::new(source).ok()?;
+    let pt = event.location();
+    Some((pt.x, pt.y))
+}
+
 #[tauri::command]
 fn drag_start(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
     emit_snap_preview(&app, None);
     let mut d = drag.lock_or_recover();
-    // Always set active so drag_end runs (for click detection, sync_hit, etc.).
-    // If pet bounds are unavailable (rare, e.g. during animation), use last known or 0,0.
     d.active = true;
     d.dragging = false;
-    d.start_mouse_x = x;
-    d.start_mouse_y = y;
-    // Window position in physical pixels to match mouse coords (toPhys in frontend)
+    // On macOS, use native CG cursor position to avoid DPI mismatch across monitors.
+    #[cfg(target_os = "macos")]
+    let (mx, my) = native_cursor_position().unwrap_or((x, y));
+    #[cfg(not(target_os = "macos"))]
+    let (mx, my) = (x, y);
+    d.start_mouse_x = mx;
+    d.start_mouse_y = my;
     if let Some(pet) = app.get_webview_window("pet") {
         if let Ok(pos) = pet.outer_position() {
             d.start_win_x = pos.x;
@@ -347,8 +364,14 @@ fn drag_move(app: AppHandle, drag: tauri::State<SharedDrag>, x: f64, y: f64) {
         return;
     }
 
-    let dx = x - smx;
-    let dy = y - smy;
+    // On macOS, use native CG cursor position to avoid DPI mismatch across monitors.
+    #[cfg(target_os = "macos")]
+    let (cx, cy) = native_cursor_position().unwrap_or((x, y));
+    #[cfg(not(target_os = "macos"))]
+    let (cx, cy) = (x, y);
+
+    let dx = cx - smx;
+    let dy = cy - smy;
 
     // Don't start moving until the mouse has moved past the drag threshold
     if !dragging {
