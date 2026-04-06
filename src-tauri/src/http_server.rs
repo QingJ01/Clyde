@@ -781,7 +781,7 @@ fn close_permission_request_ui(
         }
     };
 
-    permission::close_bubble(app, bubble_map, id);
+    permission::prepare_close_bubble(app, bubble_map, id);
 
     if was_active {
         activate_next_permission(app, pending_perms, approval_queue, bubble_map);

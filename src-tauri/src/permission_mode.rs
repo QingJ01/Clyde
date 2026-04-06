@@ -219,7 +219,7 @@ fn trigger_mode_notice(app: &AppHandle, _session_id: &str, mode: &PermissionMode
                 .collect()
         };
         for id in &existing {
-            crate::permission::close_bubble(app, &bubbles, id);
+            crate::permission::prepare_close_bubble(app, &bubbles, id);
         }
 
         let id = bubble_data.id.clone();
@@ -229,7 +229,7 @@ fn trigger_mode_notice(app: &AppHandle, _session_id: &str, mode: &PermissionMode
             let bubbles2 = (*bubbles).clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                crate::permission::close_bubble(&app2, &bubbles2, &id);
+                crate::permission::prepare_close_bubble(&app2, &bubbles2, &id);
             });
         }
     }

@@ -456,7 +456,7 @@
 {#if isUpdateNotice}
   <div class="bubble">
     <div class="glow glow-update"></div>
-    <div class="header">
+    <div class="header bubble-drag-handle">
       <div class="header-copy">
         <span class="eyebrow">Clyde</span>
         <span class="title">
@@ -484,7 +484,7 @@
 {:else if isModeNotice}
   <div class="bubble">
     <div class="glow glow-mode"></div>
-    <div class="header">
+    <div class="header bubble-drag-handle">
       <div class="header-copy">
         <span class="eyebrow">{agentLabel}</span>
         <span class="title">{sessionSummary || 'Mode Changed'}</span>
@@ -508,7 +508,7 @@
 {:else}
   <div class="bubble">
     <div class="glow"></div>
-    <div class="header">
+    <div class="header bubble-drag-handle">
       <div class="header-copy">
         <span class="eyebrow">
           {isElicitation ? `${agentLabel} Needs Reply` : `${agentLabel} Wants Access`}
