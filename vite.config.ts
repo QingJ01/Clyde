@@ -27,6 +27,7 @@ export default defineConfig({
         hit:    path.resolve(__dirname, 'src/windows/hit/index.html'),
         bubble: path.resolve(__dirname, 'src/windows/bubble/index.html'),
         menu:   path.resolve(__dirname, 'src/windows/menu/index.html'),
+        tasks:  path.resolve(__dirname, 'src/windows/tasks/index.html'),
       },
     },
   },

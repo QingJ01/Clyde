@@ -12,6 +12,7 @@ mod macos_spaces;
 mod prefs;
 mod session_meta;
 mod state_machine;
+mod tasks;
 mod tick;
 mod tray;
 mod util;
@@ -804,6 +805,11 @@ fn show_context_menu(
         }
     }
 
+    // Tasks editor
+    if let Ok(edit_tasks) = MenuItem::with_id(&app, "ctx-edit-tasks", "📋 编辑任务", true, None::<&str>) {
+        items.push(Box::new(edit_tasks));
+    }
+
     // Hide / About / Quit
     if let Ok(sep) = PredefinedMenuItem::separator(&app) {
         items.push(Box::new(sep));
@@ -1530,6 +1536,9 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
             let _ = open::that("https://github.com/QingJ01/Clyde");
         }
         "quit" => app.exit(0),
+        "edit-tasks" => {
+            show_tasks_editor(app);
+        }
         _ => {}
     }
     if refresh_tray {
@@ -1539,6 +1548,47 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
         {
             tray::rebuild_menu(app, &lang);
         }
+    }
+}
+
+fn show_tasks_editor(app: &AppHandle) {
+    use tauri::WebviewWindowBuilder;
+    // If already open, just focus it
+    if let Some(win) = app.get_webview_window("tasks") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    // Position near the pet window
+    let (x, y) = if let Some(pet) = app.get_webview_window("pet") {
+        if let Ok(pos) = pet.outer_position() {
+            (pos.x + 20, pos.y + 20)
+        } else {
+            (200, 200)
+        }
+    } else {
+        (200, 200)
+    };
+
+    if let Ok(win) = WebviewWindowBuilder::new(
+        app,
+        "tasks",
+        tauri::WebviewUrl::App("src/windows/tasks/index.html".into()),
+    )
+    .title("Tasks")
+    .inner_size(240.0, 260.0)
+    .position(x as f64, y as f64)
+    .decorations(false)
+    .transparent(false)
+    .shadow(true)
+    .always_on_top(true)
+    .resizable(false)
+    .skip_taskbar(true)
+    .build()
+    {
+        // Use a dark, opaque background so macOS receives mouse events.
+        // (Fully transparent windows on macOS don't receive clicks.)
+        let _ = win.set_background_color(Some(tauri::window::Color(30, 30, 30, 255)));
     }
 }
 
@@ -1743,6 +1793,13 @@ pub fn run() {
             permission::bubble_height_measured,
             permission::dismiss_bubble,
             focus::focus_terminal_for_session,
+            tasks::get_tasks,
+            tasks::set_tasks,
+            tasks::update_task,
+            tasks::add_task,
+            tasks::remove_task,
+            tasks::reorder_tasks,
+            tasks::close_tasks_editor,
         ])
         .setup(move |app| {
             // Hide Dock icon — the app is controlled via the tray icon instead.

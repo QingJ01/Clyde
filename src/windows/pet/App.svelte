@@ -5,6 +5,9 @@
   import { currentSvg, currentState, dndEnabled, currentLang } from '../../lib/stores';
   import { get } from 'svelte/store';
 
+  interface TaskItem { id: string; text: string; order: number; }
+  let tasks: TaskItem[] = $state([]);
+
   import _idleFollowRaw from '../../../assets/svg/clyde-idle-follow.svg?raw';
 
   const rawModules = import.meta.glob('../../../assets/svg/*.svg', {
@@ -99,6 +102,12 @@
         snapPreview = payload.active;
       }));
 
+      // Load tasks and listen for changes
+      tasks = await invoke<TaskItem[]>('get_tasks');
+      unlisten.push(await listen<TaskItem[]>('tasks-changed', ({ payload }) => {
+        tasks = payload;
+      }));
+
       unlisten.push(await listen('trigger-yawn', () => { invoke('trigger_sleep_sequence'); }));
       unlisten.push(await listen('trigger-wake', () => { invoke('trigger_wake'); }));
       unlisten.push(await listen('mini-peek-in', () => { invoke('mini_peek_in'); }));
@@ -119,6 +128,16 @@
 </script>
 
 <div id="pet-container" class:snap-preview={snapPreview} style:opacity={opacity}>
+  {#if tasks.length > 0}
+    <div class="task-panel">
+      {#each tasks.slice(0, 3) as task, i}
+        <div class="task-item">
+          <span class="task-index">{i + 1}</span>
+          <span class="task-text">{task.text}</span>
+        </div>
+      {/each}
+    </div>
+  {/if}
   <div class="svg-wrapper" style:transform={flipped ? 'scaleX(-1)' : ''}>
     {@html svgContent}
   </div>
@@ -151,6 +170,46 @@
   #pet-container:not(.snap-preview) {
     transition: transform 150ms ease-out, opacity 150ms ease-out;
   }
+  /* ── Task panel ── */
+  .task-panel {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-width: 70%;
+    pointer-events: none;
+  }
+  .task-item {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border-radius: 4px;
+    padding: 2px 6px;
+    line-height: 1.3;
+  }
+  .task-index {
+    font-size: 9px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.5);
+    flex-shrink: 0;
+    min-width: 10px;
+  }
+  .task-text {
+    font-size: 10px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.88);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  }
+
   /* Smooth eye/body tracking — interpolate between 50ms tick updates */
   .svg-wrapper :global(#eyes-js),
   .svg-wrapper :global(#body-js),
