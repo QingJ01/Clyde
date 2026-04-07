@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
 
   interface TaskItem { id: string; text: string; order: number; }
 
@@ -80,6 +81,10 @@
     window.addEventListener('pointerup', onUp);
   }
 
+  function startWindowDrag() {
+    getCurrentWindow().startDragging();
+  }
+
   async function close() {
     await save();
     await invoke('close_tasks_editor');
@@ -89,8 +94,8 @@
 </script>
 
 <div class="panel">
-  <div class="header">
-    <span class="title" data-tauri-drag-region>MY TASKS</span>
+  <div class="header" onmousedown={startWindowDrag}>
+    <span class="title">MY TASKS</span>
     <button class="close-btn" onclick={close}>
       <svg width="10" height="10" viewBox="0 0 10 10">
         <path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>

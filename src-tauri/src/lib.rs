@@ -805,9 +805,61 @@ fn show_context_menu(
         }
     }
 
-    // Tasks editor
-    if let Ok(edit_tasks) = MenuItem::with_id(&app, "ctx-edit-tasks", "📋 编辑任务", true, None::<&str>) {
-        items.push(Box::new(edit_tasks));
+    // Tasks submenu — click task to edit, ✕ to delete, + to add
+    {
+        let current_tasks = tasks::get_tasks();
+        let mut task_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
+        for task in &current_tasks {
+            let label = format!("{}. {}", task.order + 1, task.text);
+            // Click to edit
+            if let Ok(item) = MenuItem::with_id(
+                &app,
+                format!("ctx-task-edit-{}", task.id),
+                format!("✏️ {}", label),
+                true,
+                None::<&str>,
+            ) {
+                task_items.push(Box::new(item));
+            }
+            // Delete
+            if let Ok(item) = MenuItem::with_id(
+                &app,
+                format!("ctx-task-del-{}", task.id),
+                format!("    ✕ 删除"),
+                true,
+                None::<&str>,
+            ) {
+                task_items.push(Box::new(item));
+            }
+            if let Ok(sep) = PredefinedMenuItem::separator(&app) {
+                task_items.push(Box::new(sep));
+            }
+        }
+        // Move up / move down
+        for task in &current_tasks {
+            if task.order > 0 {
+                if let Ok(item) = MenuItem::with_id(
+                    &app,
+                    format!("ctx-task-up-{}", task.id),
+                    format!("↑ 上移「{}」", truncate_str(&task.text, 8)),
+                    true,
+                    None::<&str>,
+                ) {
+                    task_items.push(Box::new(item));
+                }
+            }
+        }
+        if let Ok(sep) = PredefinedMenuItem::separator(&app) {
+            task_items.push(Box::new(sep));
+        }
+        if let Ok(add) = MenuItem::with_id(&app, "ctx-task-add", "+ 添加任务", true, None::<&str>) {
+            task_items.push(Box::new(add));
+        }
+        let task_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+            task_items.iter().map(|i| i.as_ref()).collect();
+        if let Ok(submenu) = Submenu::with_items(&app, "📋 任务", true, &task_refs) {
+            items.push(Box::new(submenu));
+        }
     }
 
     // Hide / About / Quit
@@ -1536,8 +1588,43 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
             let _ = open::that("https://github.com/QingJ01/Clyde");
         }
         "quit" => app.exit(0),
-        "edit-tasks" => {
-            show_tasks_editor(app);
+        "task-add" => {
+            let text = prompt_text_input(app, "添加任务", "输入任务内容:", "");
+            if let Some(text) = text {
+                if !text.is_empty() {
+                    tasks::add_task(app.clone(), text);
+                }
+            }
+        }
+        _ if action.starts_with("task-edit-") => {
+            let task_id = action.strip_prefix("task-edit-").unwrap_or("");
+            let current = tasks::load_tasks();
+            if let Some(task) = current.iter().find(|t| t.id == task_id) {
+                let text = prompt_text_input(app, "编辑任务", "修改任务内容:", &task.text);
+                if let Some(text) = text {
+                    if !text.is_empty() {
+                        tasks::update_task(app.clone(), task_id.to_string(), text);
+                    }
+                }
+            }
+        }
+        _ if action.starts_with("task-del-") => {
+            let task_id = action.strip_prefix("task-del-").unwrap_or("");
+            if !task_id.is_empty() {
+                tasks::remove_task(app.clone(), task_id.to_string());
+            }
+        }
+        _ if action.starts_with("task-up-") => {
+            let task_id = action.strip_prefix("task-up-").unwrap_or("");
+            let mut current = tasks::load_tasks();
+            current.sort_by_key(|t| t.order);
+            if let Some(idx) = current.iter().position(|t| t.id == task_id) {
+                if idx > 0 {
+                    current.swap(idx, idx - 1);
+                    let ids: Vec<String> = current.iter().map(|t| t.id.clone()).collect();
+                    tasks::reorder_tasks(app.clone(), ids);
+                }
+            }
         }
         _ => {}
     }
@@ -1551,44 +1638,53 @@ fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
     }
 }
 
-fn show_tasks_editor(app: &AppHandle) {
-    use tauri::WebviewWindowBuilder;
-    // If already open, just focus it
-    if let Some(win) = app.get_webview_window("tasks") {
-        let _ = win.show();
-        let _ = win.set_focus();
-        return;
-    }
-    // Position near the pet window
-    let (x, y) = if let Some(pet) = app.get_webview_window("pet") {
-        if let Ok(pos) = pet.outer_position() {
-            (pos.x + 20, pos.y + 20)
-        } else {
-            (200, 200)
-        }
-    } else {
-        (200, 200)
-    };
 
-    if let Ok(win) = WebviewWindowBuilder::new(
-        app,
-        "tasks",
-        tauri::WebviewUrl::App("src/windows/tasks/index.html".into()),
-    )
-    .title("Tasks")
-    .inner_size(240.0, 260.0)
-    .position(x as f64, y as f64)
-    .decorations(false)
-    .transparent(false)
-    .shadow(true)
-    .always_on_top(true)
-    .resizable(false)
-    .skip_taskbar(true)
-    .build()
+/// Prompt user for text input via macOS native dialog (osascript).
+/// Returns None if cancelled, Some(text) if confirmed.
+fn prompt_text_input(app: &AppHandle, title: &str, message: &str, default: &str) -> Option<String> {
+    #[cfg(target_os = "macos")]
     {
-        // Use a dark, opaque background so macOS receives mouse events.
-        // (Fully transparent windows on macOS don't receive clicks.)
-        let _ = win.set_background_color(Some(tauri::window::Color(30, 30, 30, 255)));
+        // Temporarily switch to Regular so the system IME (Chinese etc.) works
+        app.set_activation_policy(tauri::ActivationPolicy::Regular);
+
+        let script = format!(
+            r#"display dialog "{}" default answer "{}" with title "{}" buttons {{"取消", "确定"}} default button "确定""#,
+            message.replace('"', r#"\""#),
+            default.replace('"', r#"\""#),
+            title.replace('"', r#"\""#),
+        );
+        let output = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .ok();
+
+        // Switch back to Accessory (hide Dock icon again)
+        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+        let output = output?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        stdout
+            .split("text returned:")
+            .nth(1)
+            .map(|s| s.trim().to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, title, message, default);
+        None
+    }
+}
+
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{truncated}…")
     }
 }
 
