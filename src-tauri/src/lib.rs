@@ -1500,7 +1500,7 @@ fn open_update_url(app: AppHandle, url: String) {
     });
     // Dismiss the update bubble
     if let Some(bubbles) = app.try_state::<permission::BubbleMap>() {
-        permission::close_bubble(&app, &bubbles, "update-check");
+        permission::prepare_close_bubble(&app, &bubbles, "update-check");
     }
 }
 
@@ -1512,8 +1512,17 @@ fn dismiss_update_version(app: AppHandle, version: String) {
         prefs::save(&app, &p);
     }
     if let Some(bubbles) = app.try_state::<permission::BubbleMap>() {
-        permission::close_bubble(&app, &bubbles, "update-check");
+        permission::prepare_close_bubble(&app, &bubbles, "update-check");
     }
+}
+
+#[tauri::command]
+fn finalize_bubble_close(
+    app: AppHandle,
+    bubbles: tauri::State<permission::BubbleMap>,
+    id: String,
+) {
+    permission::close_bubble(&app, &bubbles, &id);
 }
 
 fn handle_context_menu_event(app: &AppHandle, state: &SharedState, id: &str) {
@@ -1846,7 +1855,9 @@ pub fn run() {
             set_lang,
             permission::get_bubble_data,
             permission::bubble_height_measured,
+            permission::bubble_drag_finished,
             permission::dismiss_bubble,
+            finalize_bubble_close,
             focus::focus_terminal_for_session,
             open_update_url,
             dismiss_update_version,

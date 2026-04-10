@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::{
-    window::Color, AppHandle, LogicalSize, Manager, Size, WebviewUrl, WebviewWindowBuilder,
+    window::Color, AppHandle, Emitter, LogicalSize, Manager, Size, WebviewUrl, WebviewWindowBuilder,
 };
 
 pub type BubbleMap = Arc<Mutex<HashMap<String, BubbleEntry>>>;
@@ -137,6 +137,14 @@ pub fn show_all_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
     }
 }
 
+pub fn prepare_close_bubble(app: &AppHandle, bubbles: &BubbleMap, id: &str) {
+    let exists = bubbles.lock_or_recover().contains_key(id);
+    if !exists {
+        return;
+    }
+    let _ = app.emit("bubble-prepare-close", serde_json::json!({ "id": id }));
+}
+
 pub fn close_bubble(app: &AppHandle, bubbles: &BubbleMap, id: &str) {
     // Atomically remove from map first — if already removed (e.g. scopeguard + user click),
     // skip the rest to avoid double-destroy race condition.
@@ -159,7 +167,7 @@ pub fn close_mode_notice_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
             .collect()
     };
     for id in ids {
-        close_bubble(app, bubbles, &id);
+        prepare_close_bubble(app, bubbles, &id);
     }
 }
 
@@ -183,23 +191,20 @@ pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
 
     let monitor = get_work_area(app);
     let anchor = get_pet_anchor(app, &monitor);
+    let (offset_x, offset_y) = bubble_offset(app);
 
     // Total height needed for all bubbles (measured_height is already physical)
     let total_h: i32 = entries.iter().map(|(_, h)| *h as i32 + gap).sum();
 
-    let space_above = (anchor.y - monitor.y).max(0);
-    let space_below =
-        (monitor.y + monitor.height as i32 - (anchor.y + anchor.height as i32)).max(0);
-    let stack_above =
-        space_above >= total_h + margin || (space_above >= space_below && space_above > 0);
+    let stack_above = should_stack_above(&anchor, &monitor, total_h, margin);
 
     if stack_above {
         // Stack upward from pet's top edge
-        let mut y_bottom = anchor.y;
+        let mut y_bottom = anchor.y + offset_y;
         for (id, height) in &entries {
             let label = format!("bubble-{id}");
             if let Some(win) = app.get_webview_window(&label) {
-                let x = center_bubble_x(anchor.x, anchor.width, &monitor, scale);
+                let x = center_bubble_x(anchor.x, anchor.width, &monitor, scale, offset_x);
                 let desired_y = y_bottom - *height as i32 - gap;
                 let y = desired_y.max(monitor.y + margin);
                 let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
@@ -208,11 +213,11 @@ pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
         }
     } else {
         // Stack downward from pet's bottom edge
-        let mut y_top = anchor.y + anchor.height as i32 + gap;
+        let mut y_top = anchor.y + anchor.height as i32 + gap + offset_y;
         for (id, height) in &entries {
             let label = format!("bubble-{id}");
             if let Some(win) = app.get_webview_window(&label) {
-                let x = center_bubble_x(anchor.x, anchor.width, &monitor, scale);
+                let x = center_bubble_x(anchor.x, anchor.width, &monitor, scale, offset_x);
                 let max_y =
                     monitor.y + monitor.height as i32 - *height as i32 - margin;
                 let y = y_top.min(max_y.max(monitor.y + margin));
@@ -225,11 +230,17 @@ pub fn reposition_bubbles(app: &AppHandle, bubbles: &BubbleMap) {
 
 /// Calculate X position: center bubble relative to pet, clamped to screen.
 /// All coordinates are physical pixels; `scale` is the DPI factor.
-fn center_bubble_x(pet_x: i32, pet_width: u32, monitor: &crate::windows::MonitorArea, scale: f64) -> i32 {
+fn center_bubble_x(
+    pet_x: i32,
+    pet_width: u32,
+    monitor: &crate::windows::MonitorArea,
+    scale: f64,
+    offset_x: i32,
+) -> i32 {
     let bw = (BUBBLE_WIDTH as f64 * scale).round() as i32;
     let margin = (BUBBLE_MARGIN as f64 * scale).round() as i32;
     let center = pet_x + pet_width as i32 / 2;
-    let x = center - bw / 2;
+    let x = center - bw / 2 + offset_x;
     let min_x = monitor.x + margin;
     let max_x = monitor.x + monitor.width as i32 - bw - margin;
     x.max(min_x).min(max_x.max(min_x))
@@ -275,11 +286,22 @@ fn initial_bubble_position(app: &AppHandle, bubbles: &BubbleMap) -> (i32, i32) {
     let placeholder_h = (200.0 * scale).round() as i32;
     let monitor = get_work_area(app);
     let anchor = get_pet_anchor(app, &monitor);
+    let (offset_x, offset_y) = bubble_offset(app);
     let count = bubbles.lock_or_recover().len() as u32;
-    let x = center_bubble_x(anchor.x, anchor.width, &monitor, scale);
+    let x = center_bubble_x(anchor.x, anchor.width, &monitor, scale, offset_x);
     let min_y = monitor.y + margin;
-    let y = (anchor.y - (count as i32 + 1) * (placeholder_h + gap)).max(min_y);
+    let desired_y = anchor.y + offset_y - (count as i32 + 1) * (placeholder_h + gap);
+    let y = desired_y.max(min_y);
     (x, y)
+}
+
+fn bubble_offset(app: &AppHandle) -> (i32, i32) {
+    app.try_state::<crate::prefs::SharedPrefs>()
+        .map(|prefs| {
+            let prefs = prefs.lock_or_recover();
+            (prefs.bubble_offset_x, prefs.bubble_offset_y)
+        })
+        .unwrap_or((0, 0))
 }
 
 fn get_work_area(app: &AppHandle) -> crate::windows::MonitorArea {
@@ -311,6 +333,153 @@ fn get_work_area(app: &AppHandle) -> crate::windows::MonitorArea {
 
 fn get_scale(app: &AppHandle) -> f64 {
     crate::windows::pet_scale_factor(app)
+}
+
+fn should_stack_above(
+    anchor: &BubbleAnchor,
+    monitor: &crate::windows::MonitorArea,
+    total_h: i32,
+    margin: i32,
+) -> bool {
+    let space_above = (anchor.y - monitor.y).max(0);
+    let space_below =
+        (monitor.y + monitor.height as i32 - (anchor.y + anchor.height as i32)).max(0);
+    space_above >= total_h + margin || (space_above >= space_below && space_above > 0)
+}
+
+fn first_bubble_y(
+    anchor: &BubbleAnchor,
+    monitor: &crate::windows::MonitorArea,
+    stack_above: bool,
+    first_height: u32,
+    gap: i32,
+    margin: i32,
+    offset_y: i32,
+) -> i32 {
+    if stack_above {
+        let y_bottom = anchor.y + offset_y;
+        let desired_y = y_bottom - first_height as i32 - gap;
+        desired_y.max(monitor.y + margin)
+    } else {
+        let y_top = anchor.y + anchor.height as i32 + gap + offset_y;
+        let max_y = monitor.y + monitor.height as i32 - first_height as i32 - margin;
+        y_top.min(max_y.max(monitor.y + margin))
+    }
+}
+
+fn relative_bubble_offset(origin_x: i32, origin_y: i32, bubble_x: i32, bubble_y: i32) -> (i32, i32) {
+    (bubble_x - origin_x, bubble_y - origin_y)
+}
+
+fn sorted_bubble_entries(bubbles: &BubbleMap) -> Vec<(String, u32)> {
+    let mut entries: Vec<(String, u32)> = bubbles
+        .lock_or_recover()
+        .iter()
+        .map(|(id, e)| (id.clone(), e.measured_height))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+fn bubble_origin_for_id(
+    entries: &[(String, u32)],
+    target_id: &str,
+    anchor: &BubbleAnchor,
+    monitor: &crate::windows::MonitorArea,
+    stack_above: bool,
+    scale: f64,
+    gap: i32,
+    margin: i32,
+) -> Option<(i32, i32)> {
+    let x = center_bubble_x(anchor.x, anchor.width, monitor, scale, 0);
+
+    if stack_above {
+        let mut y_bottom = anchor.y;
+        for (id, height) in entries {
+            let desired_y = y_bottom - *height as i32 - gap;
+            let y = desired_y.max(monitor.y + margin);
+            if id == target_id {
+                return Some((x, y));
+            }
+            y_bottom = y;
+        }
+    } else {
+        let mut y_top = anchor.y + anchor.height as i32 + gap;
+        for (id, height) in entries {
+            let max_y = monitor.y + monitor.height as i32 - *height as i32 - margin;
+            let y = y_top.min(max_y.max(monitor.y + margin));
+            if id == target_id {
+                return Some((x, y));
+            }
+            y_top = y + *height as i32 + gap;
+        }
+    }
+
+    None
+}
+
+#[tauri::command]
+pub fn bubble_drag_finished(
+    app: AppHandle,
+    prefs: tauri::State<crate::prefs::SharedPrefs>,
+    id: String,
+    x: i32,
+    y: i32,
+) {
+    let scale = get_scale(&app);
+    let margin = (BUBBLE_MARGIN as f64 * scale).round() as i32;
+    let gap = (BUBBLE_GAP as f64 * scale).round() as i32;
+    let default_height = (200.0 * scale).round() as u32;
+
+    let monitor = get_work_area(&app);
+    let anchor = get_pet_anchor(&app, &monitor);
+
+    let (entries, total_h) = app
+        .try_state::<BubbleMap>()
+        .map(|bubbles| {
+            let entries = sorted_bubble_entries(&bubbles);
+            let total_h = entries.iter().map(|(_, h)| *h as i32 + gap).sum::<i32>();
+            (entries, total_h)
+        })
+        .unwrap_or_else(|| {
+            (
+                vec![(id.clone(), default_height)],
+                default_height as i32 + gap,
+            )
+        });
+
+    let stack_above = should_stack_above(&anchor, &monitor, total_h, margin);
+    let (origin_x, origin_y) = bubble_origin_for_id(
+        &entries,
+        &id,
+        &anchor,
+        &monitor,
+        stack_above,
+        scale,
+        gap,
+        margin,
+    )
+    .unwrap_or_else(|| {
+        let first_height = entries.first().map(|(_, h)| *h).unwrap_or(default_height);
+        (
+            center_bubble_x(anchor.x, anchor.width, &monitor, scale, 0),
+            first_bubble_y(
+                &anchor,
+                &monitor,
+                stack_above,
+                first_height,
+                gap,
+                margin,
+                0,
+            ),
+        )
+    });
+    let (offset_x, offset_y) = relative_bubble_offset(origin_x, origin_y, x, y);
+
+    let mut prefs = prefs.lock_or_recover();
+    prefs.bubble_offset_x = offset_x;
+    prefs.bubble_offset_y = offset_y;
+    crate::prefs::save(&app, &prefs);
 }
 
 #[tauri::command]
@@ -349,7 +518,7 @@ pub fn dismiss_bubble(
     bubbles: tauri::State<BubbleMap>,
     id: String,
 ) {
-    close_bubble(&app, &bubbles, &id);
+    prepare_close_bubble(&app, &bubbles, &id);
 }
 
 #[cfg(test)]
@@ -390,7 +559,7 @@ mod tests {
         };
 
         let scale = 1.0;
-        let x = center_bubble_x(2800, 360, &monitor, scale);
+        let x = center_bubble_x(2800, 360, &monitor, scale, 0);
         assert!(x >= monitor.x + BUBBLE_MARGIN as i32);
         assert!(x <= monitor.x + monitor.width as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32);
     }
@@ -406,7 +575,7 @@ mod tests {
         };
 
         let scale = 1.0;
-        let x = center_bubble_x(-1500, 360, &monitor, scale);
+        let x = center_bubble_x(-1500, 360, &monitor, scale, 0);
         assert!(x >= monitor.x + BUBBLE_MARGIN as i32);
         assert!(x <= monitor.x + monitor.width as i32 - BUBBLE_WIDTH as i32 - BUBBLE_MARGIN as i32);
     }
@@ -425,8 +594,270 @@ mod tests {
         let scale = 2.0;
         let bw_phys = (BUBBLE_WIDTH as f64 * scale).round() as i32; // 680
         let margin_phys = (BUBBLE_MARGIN as f64 * scale).round() as i32; // 16
-        let x = center_bubble_x(1800, 400, &monitor, scale);
+        let x = center_bubble_x(1800, 400, &monitor, scale, 0);
         assert!(x >= monitor.x + margin_phys);
         assert!(x <= monitor.x + monitor.width as i32 - bw_phys - margin_phys);
+    }
+
+    #[test]
+    fn test_center_bubble_x_applies_drag_offset_before_clamp() {
+        let monitor = crate::windows::MonitorArea {
+            key: "main".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let scale = 1.0;
+        let x = center_bubble_x(1000, 360, &monitor, scale, 120);
+        assert!(x > 1000 - (BUBBLE_WIDTH as i32 / 2));
+    }
+
+    #[test]
+    fn test_center_bubble_x_clamps_offset_to_screen_bounds() {
+        let monitor = crate::windows::MonitorArea {
+            key: "main".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let scale = 1.0;
+        let x = center_bubble_x(50, 360, &monitor, scale, -10_000);
+        assert_eq!(x, monitor.x + BUBBLE_MARGIN as i32);
+    }
+
+    #[test]
+    fn test_dragged_bubble_offset_is_relative_to_computed_origin() {
+        let origin_x = 982;
+        let origin_y = 494;
+        let bubble_x = 1120;
+        let bubble_y = 580;
+        assert_eq!(
+            relative_bubble_offset(origin_x, origin_y, bubble_x, bubble_y),
+            (138, 86)
+        );
+    }
+
+    #[test]
+    fn test_bubble_offset_round_trip_uses_same_basis_when_stacked_above() {
+        let monitor = crate::windows::MonitorArea {
+            key: "main".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let anchor = BubbleAnchor {
+            x: 1000,
+            y: 700,
+            width: 360,
+            height: 280,
+        };
+        let scale = 1.0;
+        let margin = (BUBBLE_MARGIN as f64 * scale).round() as i32;
+        let gap = (BUBBLE_GAP as f64 * scale).round() as i32;
+        let first_height = 200;
+        let total_h = first_height as i32 + gap;
+
+        let stack_above = should_stack_above(&anchor, &monitor, total_h, margin);
+        assert!(stack_above);
+
+        let origin_x = center_bubble_x(anchor.x, anchor.width, &monitor, scale, 0);
+        let origin_y = first_bubble_y(&anchor, &monitor, stack_above, first_height, gap, margin, 0);
+
+        let dragged_x = origin_x + 120;
+        let dragged_y = origin_y - 40;
+        let (offset_x, offset_y) = relative_bubble_offset(origin_x, origin_y, dragged_x, dragged_y);
+
+        let restored_x = center_bubble_x(anchor.x, anchor.width, &monitor, scale, offset_x);
+        let restored_y = first_bubble_y(
+            &anchor,
+            &monitor,
+            stack_above,
+            first_height,
+            gap,
+            margin,
+            offset_y,
+        );
+
+        assert_eq!((restored_x, restored_y), (dragged_x, dragged_y));
+    }
+
+    #[test]
+    fn test_bubble_offset_round_trip_uses_same_basis_when_stacked_below() {
+        let monitor = crate::windows::MonitorArea {
+            key: "main".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let anchor = BubbleAnchor {
+            x: 1000,
+            y: 10,
+            width: 360,
+            height: 280,
+        };
+        let scale = 1.0;
+        let margin = (BUBBLE_MARGIN as f64 * scale).round() as i32;
+        let gap = (BUBBLE_GAP as f64 * scale).round() as i32;
+        let first_height = 200;
+        let total_h = first_height as i32 + gap;
+
+        let stack_above = should_stack_above(&anchor, &monitor, total_h, margin);
+        assert!(!stack_above);
+
+        let origin_x = center_bubble_x(anchor.x, anchor.width, &monitor, scale, 0);
+        let origin_y = first_bubble_y(&anchor, &monitor, stack_above, first_height, gap, margin, 0);
+
+        let dragged_x = origin_x - 90;
+        let dragged_y = origin_y + 55;
+        let (offset_x, offset_y) = relative_bubble_offset(origin_x, origin_y, dragged_x, dragged_y);
+
+        let restored_x = center_bubble_x(anchor.x, anchor.width, &monitor, scale, offset_x);
+        let restored_y = first_bubble_y(
+            &anchor,
+            &monitor,
+            stack_above,
+            first_height,
+            gap,
+            margin,
+            offset_y,
+        );
+
+        assert_eq!((restored_x, restored_y), (dragged_x, dragged_y));
+    }
+
+    #[test]
+    fn test_first_bubble_y_applies_vertical_offset_once() {
+        let monitor = crate::windows::MonitorArea {
+            key: "main".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let anchor_above = BubbleAnchor {
+            x: 1000,
+            y: 700,
+            width: 360,
+            height: 280,
+        };
+        let anchor_below = BubbleAnchor {
+            x: 1000,
+            y: 10,
+            width: 360,
+            height: 280,
+        };
+        let scale = 1.0;
+        let margin = (BUBBLE_MARGIN as f64 * scale).round() as i32;
+        let gap = (BUBBLE_GAP as f64 * scale).round() as i32;
+        let first_height = 200;
+        let offset_y = 37;
+
+        let above_base = first_bubble_y(
+            &anchor_above,
+            &monitor,
+            true,
+            first_height,
+            gap,
+            margin,
+            0,
+        );
+        let above_shifted = first_bubble_y(
+            &anchor_above,
+            &monitor,
+            true,
+            first_height,
+            gap,
+            margin,
+            offset_y,
+        );
+        assert_eq!(above_shifted - above_base, offset_y);
+
+        let below_base = first_bubble_y(
+            &anchor_below,
+            &monitor,
+            false,
+            first_height,
+            gap,
+            margin,
+            0,
+        );
+        let below_shifted = first_bubble_y(
+            &anchor_below,
+            &monitor,
+            false,
+            first_height,
+            gap,
+            margin,
+            offset_y,
+        );
+        assert_eq!(below_shifted - below_base, offset_y);
+    }
+
+    #[test]
+    fn test_bubble_origin_for_id_uses_non_first_stack_basis_above() {
+        let monitor = crate::windows::MonitorArea {
+            key: "main".into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let anchor = BubbleAnchor {
+            x: 1000,
+            y: 700,
+            width: 360,
+            height: 280,
+        };
+        let scale = 1.0;
+        let margin = (BUBBLE_MARGIN as f64 * scale).round() as i32;
+        let gap = (BUBBLE_GAP as f64 * scale).round() as i32;
+        let entries = vec![
+            ("a".to_string(), 200),
+            ("b".to_string(), 180),
+            ("c".to_string(), 160),
+        ];
+
+        let total_h = entries.iter().map(|(_, h)| *h as i32 + gap).sum::<i32>();
+        let stack_above = should_stack_above(&anchor, &monitor, total_h, margin);
+        assert!(stack_above);
+
+        let first_origin = bubble_origin_for_id(
+            &entries,
+            "a",
+            &anchor,
+            &monitor,
+            stack_above,
+            scale,
+            gap,
+            margin,
+        )
+        .unwrap();
+        let second_origin = bubble_origin_for_id(
+            &entries,
+            "b",
+            &anchor,
+            &monitor,
+            stack_above,
+            scale,
+            gap,
+            margin,
+        )
+        .unwrap();
+
+        assert_eq!(second_origin.0, first_origin.0);
+        assert_eq!(first_origin.1 - second_origin.1, 180 + gap);
+
+        let dragged_pos = (second_origin.0 + 45, second_origin.1 - 30);
+        let (offset_x, offset_y) =
+            relative_bubble_offset(second_origin.0, second_origin.1, dragged_pos.0, dragged_pos.1);
+        let restored_second = (second_origin.0 + offset_x, second_origin.1 + offset_y);
+        let restored_if_using_first = (first_origin.0 + offset_x, first_origin.1 + offset_y);
+
+        assert_eq!(restored_second, dragged_pos);
+        assert_ne!(restored_if_using_first, dragged_pos);
     }
 }

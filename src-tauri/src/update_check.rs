@@ -220,7 +220,7 @@ fn show_status_bubble(app: &AppHandle, title_key: &str, description: &str) {
         let bubbles2 = (*bubbles).clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(Duration::from_secs(4)).await;
-            crate::permission::close_bubble(&app2, &bubbles2, &id);
+            crate::permission::prepare_close_bubble(&app2, &bubbles2, &id);
         });
     }
 }

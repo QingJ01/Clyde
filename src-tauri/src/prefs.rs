@@ -40,6 +40,10 @@ pub struct Prefs {
     pub auto_start_with_claude: bool,
     #[serde(default)]
     pub bubble_follow_pet: bool,
+    #[serde(default)]
+    pub bubble_offset_x: i32,
+    #[serde(default)]
+    pub bubble_offset_y: i32,
     #[serde(default = "default_opacity")]
     pub opacity: f32,
     #[serde(default)]
@@ -120,6 +124,8 @@ impl Default for Prefs {
             show_tray: true,
             auto_start_with_claude: false,
             bubble_follow_pet: false,
+            bubble_offset_x: 0,
+            bubble_offset_y: 0,
             opacity: default_opacity(),
             lock_position: false,
             click_through: false,
@@ -211,5 +217,26 @@ mod tests {
         assert_eq!(normalize_permission_decision_window_secs(3), 8);
         assert_eq!(normalize_permission_decision_window_secs(12), 12);
         assert_eq!(normalize_permission_decision_window_secs(240), 120);
+    }
+
+    #[test]
+    fn test_bubble_offset_defaults_to_zero() {
+        let prefs = Prefs::default();
+        assert_eq!(prefs.bubble_offset_x, 0);
+        assert_eq!(prefs.bubble_offset_y, 0);
+    }
+
+    #[test]
+    fn test_prefs_roundtrip_preserves_bubble_offset() {
+        let prefs = Prefs {
+            bubble_offset_x: 48,
+            bubble_offset_y: -96,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&prefs).unwrap();
+        let roundtrip: Prefs = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip.bubble_offset_x, 48);
+        assert_eq!(roundtrip.bubble_offset_y, -96);
     }
 }
